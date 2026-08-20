@@ -4,6 +4,10 @@ __pycache__/
 *.py[cod]
 .DS_Store
 .venv/
+.env
+.env.*
+!.env.example
+!**/.env.example
 
 # Generated document and presentation QA intermediates
 artifacts/build_doc/
