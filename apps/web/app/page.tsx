@@ -169,7 +169,7 @@ type CitationGraph = {
 
 type TimelineItem = { type: string; title: string; detail: string; state: "done" | "active" | "waiting" };
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8002";
 const today = new Date().toISOString().slice(0, 10);
 
 const initialQuestion = "Does agentic RAG significantly outperform traditional RAG for multi-hop enterprise question answering?";

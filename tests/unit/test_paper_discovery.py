@@ -1,5 +1,6 @@
 from datetime import date
 from io import BytesIO
+from urllib.parse import parse_qs, urlparse
 
 from pypdf import PdfWriter
 
@@ -212,6 +213,22 @@ def test_crossref_normalizes_doi_metadata() -> None:
     assert paper.doi == "10.1000/crossref"
     assert paper.abstract == "Evidence abstract."
     assert paper.open_access is True
+
+
+def test_crossref_uses_a_compatible_unrestricted_field_set() -> None:
+    requested_urls: list[str] = []
+
+    def fetch(url: str) -> dict:
+        requested_urls.append(url)
+        return {"message": {"items": []}}
+
+    connector = CrossrefConnector(contact_email="test@example.com", fetch=fetch)
+    connector.discover(_request().model_copy(update={"providers": ["crossref"]}))
+
+    query = parse_qs(urlparse(requested_urls[0]).query)
+    assert query["query"] == ["agentic retrieval"]
+    assert query["rows"] == ["25"]
+    assert "select" not in query
 
 
 def test_discovery_enforces_open_access_across_connectors() -> None:

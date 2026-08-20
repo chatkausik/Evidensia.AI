@@ -299,7 +299,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
   .studio-nav nav { display: flex; margin: 0 0 0 auto; }
   .nav-item { width: 34px; height: 34px; padding: 7px; justify-content: center; }
   .nav-item span { width: auto; }
-  .nav-item:not(.active) { display: none; }
+  .nav-item:not(.active) { display: flex; opacity: .68; }
   .nav-item { font-size: 0; }
   .corpus-card, .nav-foot { display: none; }
   .topbar { min-height: 72px; padding: 16px 20px; }

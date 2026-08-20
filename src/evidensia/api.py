@@ -132,9 +132,21 @@ def create_app(*, seed_demo: bool = True, data_dir: str | None = None) -> FastAP
         version=__version__,
     )
     application.state.container = ApplicationContainer(seed_demo=seed_demo, data_dir=data_dir)
+    default_origins = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+        "https://evidensia-research-studio.chat-kausik.chatgpt.site",
+    ]
+    configured_origins = [
+        value.strip()
+        for value in os.getenv("EVIDENSIA_CORS_ORIGINS", "").split(",")
+        if value.strip()
+    ]
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+        allow_origins=list(dict.fromkeys([*default_origins, *configured_origins])),
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],

@@ -23,7 +23,6 @@ class CrossrefConnector:
             "query": request.query,
             "filter": f"from-pub-date:{request.date_from.isoformat()},until-pub-date:{request.date_to.isoformat()}",
             "rows": min(request.limit, 100),
-            "select": "DOI,title,abstract,author,published,container-title,URL,license,reference-count,is-referenced-by-count,type,relation,update-to",
         }
         if self.contact_email:
             params["mailto"] = self.contact_email
