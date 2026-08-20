@@ -2,8 +2,9 @@
 
 import { useRef, useState } from "react";
 
-type View = "research" | "library" | "debugger" | "evaluations";
+type View = "research" | "discover" | "library" | "debugger" | "evaluations";
 type Depth = "quick" | "standard" | "deep";
+type PaperProvider = "arxiv" | "openalex";
 
 type Citation = {
   citation_id: string;
@@ -54,9 +55,32 @@ type DocumentItem = {
   topics: string[];
 };
 
+type DiscoveredPaper = {
+  paper_id: string;
+  providers: PaperProvider[];
+  title: string;
+  abstract: string;
+  authors: string[];
+  published_at: string;
+  venue: string | null;
+  doi: string | null;
+  categories: string[];
+  topics: string[];
+  landing_url: string;
+  open_access: boolean;
+  publication_type: string;
+  citation_count: number | null;
+};
+
+type DiscoveryResponse = {
+  papers: DiscoveredPaper[];
+  warnings: string[];
+};
+
 type TimelineItem = { type: string; title: string; detail: string; state: "done" | "active" | "waiting" };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const today = new Date().toISOString().slice(0, 10);
 
 const initialQuestion = "Does agentic RAG significantly outperform traditional RAG for multi-hop enterprise question answering?";
 
@@ -149,6 +173,15 @@ export default function Home() {
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [selectedEvidence, setSelectedEvidence] = useState<Evidence | null>(null);
   const [documents, setDocuments] = useState(startingDocuments);
+  const [discoveryQuery, setDiscoveryQuery] = useState("agentic RAG multi-hop question answering");
+  const [dateFrom, setDateFrom] = useState("2025-01-01");
+  const [dateTo, setDateTo] = useState(today);
+  const [paperProviders, setPaperProviders] = useState<PaperProvider[]>(["arxiv", "openalex"]);
+  const [discoveredPapers, setDiscoveredPapers] = useState<DiscoveredPaper[]>([]);
+  const [selectedPaperIds, setSelectedPaperIds] = useState<Set<string>>(new Set());
+  const [discovering, setDiscovering] = useState(false);
+  const [importingPapers, setImportingPapers] = useState(false);
+  const [discoveryNotice, setDiscoveryNotice] = useState("");
   const [debugQuery, setDebugQuery] = useState("Agentic RAG multi-hop HotpotQA");
   const [debugging, setDebugging] = useState(false);
   const [evalRunning, setEvalRunning] = useState(false);
@@ -238,6 +271,87 @@ export default function Home() {
     setDebugging(false);
   }
 
+  function toggleProvider(provider: PaperProvider) {
+    setPaperProviders((current) => current.includes(provider)
+      ? current.filter((item) => item !== provider)
+      : [...current, provider]);
+  }
+
+  function togglePaper(paperId: string) {
+    setSelectedPaperIds((current) => {
+      const next = new Set(current);
+      if (next.has(paperId)) next.delete(paperId);
+      else next.add(paperId);
+      return next;
+    });
+  }
+
+  async function discoverPapers(event: React.FormEvent) {
+    event.preventDefault();
+    if (discoveryQuery.trim().length < 2 || paperProviders.length === 0 || discovering) return;
+    setDiscovering(true);
+    setDiscoveryNotice("");
+    try {
+      const response = await fetch(`${API_BASE}/v1/sources/discover`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: discoveryQuery,
+          date_from: dateFrom,
+          date_to: dateTo,
+          providers: paperProviders,
+          open_access_only: true,
+          limit: 30,
+        }),
+      });
+      if (!response.ok) throw new Error("Discovery request failed");
+      const result: DiscoveryResponse = await response.json();
+      setDiscoveredPapers(result.papers);
+      setSelectedPaperIds(new Set(result.papers.slice(0, 5).map((paper) => paper.paper_id)));
+      const found = `${result.papers.length} unique papers found`;
+      setDiscoveryNotice(result.warnings.length ? `${found}. ${result.warnings.join(" · ")}` : found);
+    } catch {
+      setDiscoveryNotice("The paper discovery API is unavailable. Start the Evidensia API locally, then try again.");
+    } finally {
+      setDiscovering(false);
+    }
+  }
+
+  async function importDiscoveredPapers() {
+    if (selectedPaperIds.size === 0 || importingPapers) return;
+    setImportingPapers(true);
+    try {
+      const response = await fetch(`${API_BASE}/v1/sources/import`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paper_ids: [...selectedPaperIds] }),
+      });
+      if (!response.ok) throw new Error("Import request failed");
+      const result = await response.json();
+      const additions: DocumentItem[] = result.imported.map((record: {
+        document_id: string;
+        filename: string;
+        chunk_count: number;
+        metadata: null | { title: string; document_type: string; publication_year: number | null; topics: string[] };
+      }) => ({
+        id: record.document_id,
+        title: record.metadata?.title || record.filename,
+        type: record.metadata?.document_type === "research_paper" ? "Research paper" : "Paper abstract",
+        year: record.metadata?.publication_year || new Date().getFullYear(),
+        chunks: record.chunk_count,
+        status: "Indexed",
+        topics: record.metadata?.topics?.slice(0, 3) || ["Discovered source"],
+      }));
+      setDocuments((current) => [...additions, ...current.filter((document) => !additions.some((item) => item.id === document.id))]);
+      setDiscoveryNotice(`${additions.length} papers imported into the evidence library${result.skipped.length ? ` · ${result.skipped.length} already indexed` : ""}.`);
+      setSelectedPaperIds(new Set());
+    } catch {
+      setDiscoveryNotice("The selected papers could not be imported. Check the API connection and retry.");
+    } finally {
+      setImportingPapers(false);
+    }
+  }
+
   async function runEvaluation() {
     setEvalRunning(true);
     await sleep(950);
@@ -246,6 +360,7 @@ export default function Home() {
 
   const navItems: Array<{ id: View; label: string; icon: string }> = [
     { id: "research", label: "Research", icon: "⌕" },
+    { id: "discover", label: "Discover papers", icon: "✦" },
     { id: "library", label: "Source library", icon: "▱" },
     { id: "debugger", label: "Retrieval debugger", icon: "≋" },
     { id: "evaluations", label: "Evaluations", icon: "◇" },
@@ -297,11 +412,118 @@ export default function Home() {
             reset={() => { setRun(null); setTimeline([]); setSelectedEvidence(null); }}
           />
         )}
+        {view === "discover" && (
+          <DiscoveryView
+            query={discoveryQuery}
+            setQuery={setDiscoveryQuery}
+            dateFrom={dateFrom}
+            setDateFrom={setDateFrom}
+            dateTo={dateTo}
+            setDateTo={setDateTo}
+            providers={paperProviders}
+            toggleProvider={toggleProvider}
+            papers={discoveredPapers}
+            selectedPaperIds={selectedPaperIds}
+            togglePaper={togglePaper}
+            discovering={discovering}
+            importing={importingPapers}
+            notice={discoveryNotice}
+            onDiscover={discoverPapers}
+            onImport={importDiscoveredPapers}
+          />
+        )}
         {view === "library" && <LibraryView documents={documents} onImport={() => fileRef.current?.click()} />}
         {view === "debugger" && <DebuggerView query={debugQuery} setQuery={setDebugQuery} loading={debugging} onRun={runDebug} />}
         {view === "evaluations" && <EvaluationsView running={evalRunning} onRun={runEvaluation} />}
       </section>
     </main>
+  );
+}
+
+function DiscoveryView(props: {
+  query: string;
+  setQuery: (value: string) => void;
+  dateFrom: string;
+  setDateFrom: (value: string) => void;
+  dateTo: string;
+  setDateTo: (value: string) => void;
+  providers: PaperProvider[];
+  toggleProvider: (provider: PaperProvider) => void;
+  papers: DiscoveredPaper[];
+  selectedPaperIds: Set<string>;
+  togglePaper: (paperId: string) => void;
+  discovering: boolean;
+  importing: boolean;
+  notice: string;
+  onDiscover: (event: React.FormEvent) => void;
+  onImport: () => void;
+}) {
+  return (
+    <div className="page-canvas discovery-page">
+      <div className="page-heading">
+        <div>
+          <span className="signal"><i /> LIVE SCHOLARLY SOURCES</span>
+          <h1>Discover papers</h1>
+          <p>Search recent AI research across arXiv and OpenAlex, review provenance, then index selected abstracts for evidence retrieval.</p>
+        </div>
+      </div>
+
+      <form className="discovery-form" onSubmit={props.onDiscover}>
+        <label className="discovery-query" htmlFor="paper-query">
+          <span>Research topic</span>
+          <input id="paper-query" value={props.query} onChange={(event) => props.setQuery(event.target.value)} placeholder="e.g. multimodal agents for scientific discovery" />
+        </label>
+        <div className="discovery-controls">
+          <label><span>From</span><input type="date" value={props.dateFrom} onChange={(event) => props.setDateFrom(event.target.value)} /></label>
+          <label><span>To</span><input type="date" value={props.dateTo} onChange={(event) => props.setDateTo(event.target.value)} /></label>
+          <fieldset>
+            <legend>Sources</legend>
+            {(["arxiv", "openalex"] as PaperProvider[]).map((provider) => (
+              <label key={provider}><input type="checkbox" checked={props.providers.includes(provider)} onChange={() => props.toggleProvider(provider)} /> {provider === "arxiv" ? "arXiv" : "OpenAlex"}</label>
+            ))}
+          </fieldset>
+          <button className="primary-button" disabled={props.discovering || props.providers.length === 0}>
+            {props.discovering ? "Searching…" : "Find papers"}<span>→</span>
+          </button>
+        </div>
+      </form>
+
+      {props.notice && <p className="discovery-notice" role="status">{props.notice}</p>}
+
+      <div className="discovery-toolbar">
+        <div><span className="micro-label">DISCOVERY RESULTS</span><strong>{props.papers.length || "—"}</strong></div>
+        <button className="ghost-button" type="button" disabled={props.selectedPaperIds.size === 0 || props.importing} onClick={props.onImport}>
+          {props.importing ? "Indexing…" : `Index selected (${props.selectedPaperIds.size})`}
+        </button>
+      </div>
+
+      {props.papers.length === 0 ? (
+        <div className="paper-empty"><span>✦</span><strong>Search the 2025–2026 literature</strong><p>Results are deduplicated by DOI and paper identity before they reach your library.</p></div>
+      ) : (
+        <div className="paper-results">
+          {props.papers.map((paper) => (
+            <article className={`paper-result ${props.selectedPaperIds.has(paper.paper_id) ? "selected" : ""}`} key={paper.paper_id}>
+              <label className="paper-select" aria-label={`Select ${paper.title}`}><input type="checkbox" checked={props.selectedPaperIds.has(paper.paper_id)} onChange={() => props.togglePaper(paper.paper_id)} /></label>
+              <div className="paper-copy">
+                <div className="paper-meta">
+                  <span>{paper.providers.map((provider) => provider === "arxiv" ? "arXiv" : "OpenAlex").join(" + ")}</span>
+                  <span>{paper.published_at}</span>
+                  <span>{paper.open_access ? "Open access" : "Access unknown"}</span>
+                  {paper.citation_count !== null && <span>{paper.citation_count} citations</span>}
+                </div>
+                <h2>{paper.title}</h2>
+                <p className="paper-authors">{paper.authors.slice(0, 4).join(", ")}{paper.authors.length > 4 ? " et al." : ""}</p>
+                <p className="paper-abstract">{paper.abstract}</p>
+                <footer>
+                  <span>{paper.venue || paper.categories.slice(0, 3).join(" · ") || paper.publication_type}</span>
+                  <a href={paper.landing_url} target="_blank" rel="noreferrer">View source ↗</a>
+                </footer>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
