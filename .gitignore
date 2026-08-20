@@ -1,0 +1,12 @@
+.evidensia_data/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+.DS_Store
+.venv/
+
+# Generated document and presentation QA intermediates
+artifacts/build_doc/
+artifacts/build_ppt/
+artifacts/Evidensia_AI_Project_Presentation/
+artifacts/*.inspect.ndjson
