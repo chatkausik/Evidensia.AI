@@ -4,11 +4,16 @@ Evidensia is an autonomous research and evidence-intelligence platform. This bui
 
 Phases 5 (production infrastructure) and 7 (large-scale deployment) from the source design are intentionally deferred.
 
+![Evidensia end-to-end research flow](docs/assets/evidensia-end-to-end-flow.svg)
+
+See [Architecture and research flow](docs/ARCHITECTURE.md) for the complete execution model, runtime boundaries, corrective-retrieval loop, and component map.
+
 ## Quick start
 
 ```bash
 python3 -m pip install -e '.[dev]'
-uvicorn evidensia.api:app --port 8001 --reload
+cp .env.example .env
+uvicorn evidensia.api:app --host 127.0.0.1 --port 8002 --reload --env-file .env
 ```
 
 In a second terminal:
@@ -19,7 +24,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`. The API runs at `http://localhost:8001`, with interactive documentation at `/docs`.
+Open `http://localhost:3000` (or the next port reported by the development server). The API runs at `http://127.0.0.1:8002`, with interactive documentation at `http://127.0.0.1:8002/docs`.
 
 The local API stores documents, research runs and event timelines, evaluation experiments, feedback, saved searches, and collections under `.evidensia_data` by default, so work survives API restarts. Set `EVIDENSIA_DATA_DIR` before starting the API to use a different location.
 
@@ -54,7 +59,7 @@ Set `OPENAI_API_KEY` to enable OpenAI-backed research planning, evidence-grounde
 ```bash
 export OPENAI_API_KEY=your_key
 export EVIDENSIA_OPENAI_MODEL=gpt-5.4-mini
-uvicorn evidensia.api:app --port 8001 --reload
+uvicorn evidensia.api:app --host 127.0.0.1 --port 8002 --reload --env-file .env
 ```
 
 ## Implemented scope
