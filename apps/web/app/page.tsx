@@ -31,6 +31,7 @@ type ResearchRun = {
   status: string;
   confidence: number;
   iterations: number;
+  provider_manifest: Record<string, string>;
   sub_questions: Array<{ id: string; question: string; purpose: string; completed: boolean }>;
   retrieved_evidence: Evidence[];
   final_report: null | {
@@ -231,6 +232,7 @@ export default function Home() {
   const [comparison, setComparison] = useState<ComparisonRow[]>([]);
   const [citationGraph, setCitationGraph] = useState<CitationGraph | null>(null);
   const [researchError, setResearchError] = useState("");
+  const [providerManifest, setProviderManifest] = useState<Record<string, string>>({});
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -251,6 +253,7 @@ export default function Home() {
     fetch(`${API_BASE}/v1/saved-searches`).then((response) => response.ok ? response.json() : []).then((items: SavedSearch[]) => { if (active) setSavedSearches(items); }).catch(() => undefined);
     fetch(`${API_BASE}/v1/evals/experiments`).then((response) => response.ok ? response.json() : []).then((items: Experiment[]) => { if (active) setExperiments(items); }).catch(() => undefined);
     fetch(`${API_BASE}/v1/collections`).then((response) => response.ok ? response.json() : []).then((items: ResearchCollection[]) => { if (active) setCollections(items); }).catch(() => undefined);
+    fetch(`${API_BASE}/v1/providers`).then((response) => response.ok ? response.json() : {}).then((manifest: Record<string, string>) => { if (active) setProviderManifest(manifest); }).catch(() => undefined);
     return () => { active = false; };
   }, []);
 
@@ -581,7 +584,7 @@ export default function Home() {
           <strong>Open research</strong>
           <small>{indexedDocuments.length} indexed · {indexedDocuments.reduce((sum, item) => sum + item.chunks, 0)} chunks</small>
         </div>
-        <div className="nav-foot"><span className="status-dot" /> Evidence engine ready</div>
+        <div className="nav-foot"><span className="status-dot" /> {providerManifest.research?.startsWith("openai:") ? `AI · ${providerManifest.research.replace("openai:", "")}` : libraryConnection === "live" ? "Deterministic fallback" : "Evidence engine offline"}</div>
       </aside>
 
       <section className="studio-main">
@@ -795,6 +798,7 @@ function ResearchView(props: {
           <span className={`run-status ${props.running ? "working" : "complete"}`}>{props.running ? "● RESEARCH IN PROGRESS" : "✓ RESEARCH COMPLETE"}</span>
           <h1>{props.run?.question || props.question}</h1>
           <p>{props.running ? "Planning, searching, challenging, and verifying the evidence." : `${props.run?.retrieved_evidence.length || 0} evidence spans · ${props.run?.iterations || 0} research cycles · all citations checked`}</p>
+          {props.run?.provider_manifest?.research && <span className="model-chip">{props.run.provider_manifest.research.startsWith("openai:") ? `CONFIGURED · OPENAI ${props.run.provider_manifest.research.replace("openai:", "")}` : "DETERMINISTIC FALLBACK"}</span>}
         </div>
         {!props.running && <button className="ghost-button" onClick={props.reset}>New question</button>}
       </div>

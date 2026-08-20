@@ -28,7 +28,7 @@ from evidensia.api_models import (
     SearchRequest,
 )
 from evidensia.evals import EvaluationRunner
-from evidensia.agents import SynthesisEngine
+from evidensia.agents import ResearchPlanner, SynthesisEngine
 from evidensia.models import (
     AgentEvent,
     CitationGraph,
@@ -64,7 +64,8 @@ class ApplicationContainer:
         self.research = ResearchRunService(
             self.knowledge.index,
             searcher=self.searcher,
-            synthesis=SynthesisEngine(self.providers.entailment),
+            planner=ResearchPlanner(self.providers.research),
+            synthesis=SynthesisEngine(self.providers.entailment, self.providers.research),
             store=self.state_store,
             provider_manifest=self.providers.manifest,
         )

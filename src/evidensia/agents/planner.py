@@ -1,13 +1,30 @@
 from __future__ import annotations
 
+import logging
 import re
 
+from evidensia.agents.openai_reasoning import ResearchReasoningProvider
 from evidensia.models import ResearchPlan, SubQuestion
 from evidensia.retrieval.query import classify_query
 
 
+logger = logging.getLogger(__name__)
+
+
 class ResearchPlanner:
+    def __init__(self, reasoning: ResearchReasoningProvider | None = None) -> None:
+        self.reasoning = reasoning
+
     def create_plan(self, question: str, depth: str = "standard") -> ResearchPlan:
+        fallback = self._deterministic_plan(question, depth)
+        if self.reasoning:
+            try:
+                return self.reasoning.plan(question, depth, fallback)
+            except Exception as exc:
+                logger.warning("Research model planning failed; using deterministic fallback: %s", type(exc).__name__)
+        return fallback
+
+    def _deterministic_plan(self, question: str, depth: str = "standard") -> ResearchPlan:
         intent = classify_query(question)
         subjects = self._subjects(question)
         questions: list[tuple[str, str, str, list[str]]] = []
@@ -66,4 +83,3 @@ class ResearchPlanner:
         if not match:
             return []
         return [re.sub(r"^(does|do|is|are)\s+", "", part.strip(), flags=re.IGNORECASE) for part in match.groups()]
-

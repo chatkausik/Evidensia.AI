@@ -1,18 +1,36 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 
+from evidensia.agents.openai_reasoning import ResearchReasoningProvider
 from evidensia.models import CitationVerification, Evidence, ResearchClaim, ResearchReport
 from evidensia.providers import EntailmentProvider, LexicalEntailmentProvider
 from evidensia.retrieval.index import LocalKnowledgeIndex
 from evidensia.retrieval.text import tokenize
 
 
-class SynthesisEngine:
-    def __init__(self, entailment: EntailmentProvider | None = None) -> None:
-        self.entailment = entailment or LexicalEntailmentProvider()
+logger = logging.getLogger(__name__)
 
-    def build_claims(self, evidence: list[Evidence]) -> list[ResearchClaim]:
+
+class SynthesisEngine:
+    def __init__(
+        self,
+        entailment: EntailmentProvider | None = None,
+        reasoning: ResearchReasoningProvider | None = None,
+    ) -> None:
+        self.entailment = entailment or LexicalEntailmentProvider()
+        self.reasoning = reasoning
+
+    def build_claims(self, evidence: list[Evidence], question: str = "") -> list[ResearchClaim]:
+        if self.reasoning and evidence:
+            try:
+                return self.reasoning.synthesize_claims(question, evidence)
+            except Exception as exc:
+                logger.warning("Research model synthesis failed; using deterministic fallback: %s", type(exc).__name__)
+        return self._deterministic_claims(evidence)
+
+    def _deterministic_claims(self, evidence: list[Evidence]) -> list[ResearchClaim]:
         claims: list[ResearchClaim] = []
         support = sorted(
             (item for item in evidence if item.evidence_type != "contradicting"),
@@ -61,6 +79,20 @@ class SynthesisEngine:
         index: LocalKnowledgeIndex,
     ) -> list[CitationVerification]:
         evidence_by_id = {item.evidence_id: item for item in evidence}
+        passages: dict[tuple[str, str], str] = {}
+        for claim in claims:
+            for evidence_id in [*claim.evidence_ids, *claim.opposing_evidence_ids]:
+                item = evidence_by_id.get(evidence_id)
+                chunk = index.get(item.citation.chunk_id) if item else None
+                if chunk and chunk.document_id == item.citation.document_id:
+                    passages[(claim.claim_id, evidence_id)] = chunk.text
+        model_checks: dict[tuple[str, str], tuple[bool, float, str | None]] = {}
+        if self.reasoning and passages:
+            try:
+                model_checks = self.reasoning.verify_claims(claims, evidence, passages)
+            except Exception as exc:
+                logger.warning("Research model verification failed; using lexical fallback: %s", type(exc).__name__)
+                model_checks = {}
         checks: list[CitationVerification] = []
         for claim in claims:
             for evidence_id in [*claim.evidence_ids, *claim.opposing_evidence_ids]:
@@ -70,7 +102,11 @@ class SynthesisEngine:
                 chunk = index.get(item.citation.chunk_id)
                 valid = chunk is not None and chunk.document_id == item.citation.document_id
                 entails, entailment_score = self.entailment.check(claim.statement, chunk.text) if valid else (False, 0.0)
-                if valid and item.supporting_text.lower() in chunk.text.lower():
+                issue: str | None = None
+                decision = model_checks.get((claim.claim_id, evidence_id)) if valid else None
+                if decision:
+                    entails, entailment_score, issue = decision
+                if valid and not decision and item.supporting_text.lower() in chunk.text.lower():
                     entails = True
                     entailment_score = max(entailment_score, 0.95)
                 checks.append(
@@ -80,7 +116,7 @@ class SynthesisEngine:
                         valid_source=valid,
                         entails_claim=entails,
                         citation_quality=(item.source_quality * 0.4 + item.relevance * 0.35 + entailment_score * 0.25) if valid and entails else 0,
-                        issue=None if valid and entails else ("Source chunk was not found" if not valid else "Source does not sufficiently entail the claim"),
+                        issue=None if valid and entails else ("Source chunk was not found" if not valid else issue or "Source does not sufficiently entail the claim"),
                     )
                 )
         return checks
@@ -115,17 +151,36 @@ class SynthesisEngine:
             + (f", with {mixed} materially qualified by counter-evidence" if mixed else "")
             + "."
         )
-        return ResearchReport(
+        fallback = ResearchReport(
             research_question=question,
             executive_summary=" ".join(findings[:2]) if findings else "The indexed corpus does not yet contain enough evidence for a defensible answer.",
             conclusion=conclusion,
             key_findings=findings,
             claims=valid_claims,
-            limitations=["Results reflect only the currently indexed corpus.", "Local deterministic scoring is a development baseline, not a hosted cross-encoder."],
+            limitations=[
+                "Results reflect only the currently indexed corpus.",
+                "OpenAI-backed stages use deterministic fallbacks after provider or validation failures."
+                if self.reasoning else
+                "Local deterministic scoring is a development baseline, not a hosted cross-encoder.",
+            ],
             unresolved_questions=unresolved,
             confidence_score=max(0, min(1, confidence)),
             sources=sources,
         )
+        if self.reasoning:
+            try:
+                return self.reasoning.compose_report(
+                    question,
+                    valid_claims,
+                    evidence,
+                    verifications,
+                    unresolved,
+                    sources,
+                    fallback,
+                )
+            except Exception as exc:
+                logger.warning("Research model report composition failed; using deterministic fallback: %s", type(exc).__name__)
+        return fallback
 
     @staticmethod
     def _overlap(left: str, right: str) -> float:

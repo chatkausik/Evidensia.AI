@@ -41,12 +41,13 @@ class ResearchOrchestrator:
         self,
         index: LocalKnowledgeIndex,
         searcher: HybridSearcher | None = None,
+        planner: ResearchPlanner | None = None,
         synthesis: SynthesisEngine | None = None,
         provider_manifest: dict[str, str] | None = None,
     ) -> None:
         self.index = index
         self.searcher = searcher or HybridSearcher(index)
-        self.planner = ResearchPlanner()
+        self.planner = planner or ResearchPlanner()
         self.extractor = EvidenceExtractor()
         self.sufficiency = SufficiencyEvaluator()
         self.synthesis = synthesis or SynthesisEngine()
@@ -174,7 +175,7 @@ class ResearchOrchestrator:
 
     def _synthesize(self, state: GraphState) -> dict[str, Any]:
         validated = ResearchState.model_validate(state)
-        claims = self.synthesis.build_claims(validated.retrieved_evidence)
+        claims = self.synthesis.build_claims(validated.retrieved_evidence, validated.question)
         return {"claims": [item.model_dump(mode="python") for item in claims], "status": "verifying"}
 
     def _verify(self, state: GraphState) -> dict[str, Any]:

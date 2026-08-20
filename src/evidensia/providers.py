@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from evidensia.models import ChunkRecord, QueryIntent
 from evidensia.retrieval.text import hashed_vector, tokenize
+
+if TYPE_CHECKING:
+    from evidensia.agents.openai_reasoning import ResearchReasoningProvider
 
 
 class EmbeddingProvider(Protocol):
@@ -125,6 +128,7 @@ class ProviderBundle:
     embedding: EmbeddingProvider
     reranker: RerankerProvider
     entailment: EntailmentProvider
+    research: ResearchReasoningProvider | None = None
 
     @property
     def manifest(self) -> dict[str, str]:
@@ -132,6 +136,7 @@ class ProviderBundle:
             "embedding": self.embedding.name,
             "reranker": self.reranker.name,
             "entailment": self.entailment.name,
+            "research": self.research.name if self.research else "deterministic-fallback",
         }
 
 
@@ -139,6 +144,7 @@ def providers_from_environment() -> ProviderBundle:
     embedding: EmbeddingProvider = HashedEmbeddingProvider()
     reranker: RerankerProvider = LexicalRerankerProvider()
     entailment: EntailmentProvider = LexicalEntailmentProvider()
+    research: ResearchReasoningProvider | None = None
     if url := os.getenv("EVIDENSIA_EMBEDDING_URL", "").strip():
         embedding = RemoteEmbeddingProvider(
             url,
@@ -157,4 +163,18 @@ def providers_from_environment() -> ProviderBundle:
             api_key=os.getenv("EVIDENSIA_ENTAILMENT_API_KEY", "").strip(),
             model=os.getenv("EVIDENSIA_ENTAILMENT_MODEL", "").strip(),
         )
-    return ProviderBundle(embedding=embedding, reranker=reranker, entailment=entailment)
+    if api_key := os.getenv("OPENAI_API_KEY", "").strip():
+        from evidensia.agents.openai_reasoning import OpenAIResearchProvider
+
+        reasoning_effort = os.getenv("EVIDENSIA_OPENAI_REASONING_EFFORT", "low").strip().lower()
+        if reasoning_effort not in {"none", "low", "medium", "high", "xhigh"}:
+            raise ValueError("EVIDENSIA_OPENAI_REASONING_EFFORT must be none, low, medium, high, or xhigh")
+        research = OpenAIResearchProvider(
+            api_key,
+            model=os.getenv("EVIDENSIA_OPENAI_MODEL", "gpt-5.4-mini").strip(),
+            base_url=os.getenv("EVIDENSIA_OPENAI_BASE_URL", "https://api.openai.com/v1").strip(),
+            reasoning_effort=reasoning_effort,  # type: ignore[arg-type]
+            timeout=float(os.getenv("EVIDENSIA_OPENAI_TIMEOUT", "45")),
+            max_output_tokens=int(os.getenv("EVIDENSIA_OPENAI_MAX_OUTPUT_TOKENS", "3000")),
+        )
+    return ProviderBundle(embedding=embedding, reranker=reranker, entailment=entailment, research=research)

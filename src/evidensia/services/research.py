@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 import uuid
 
-from evidensia.agents import SynthesisEngine
+from evidensia.agents import ResearchPlanner, SynthesisEngine
 from evidensia.graph import ResearchOrchestrator
 from evidensia.models import AgentEvent, ResearchRequest, ResearchState
 from evidensia.persistence import LocalStateStore
@@ -16,6 +16,7 @@ class ResearchRunService:
         index: LocalKnowledgeIndex,
         *,
         searcher: HybridSearcher | None = None,
+        planner: ResearchPlanner | None = None,
         synthesis: SynthesisEngine | None = None,
         store: LocalStateStore | None = None,
         provider_manifest: dict[str, str] | None = None,
@@ -24,6 +25,7 @@ class ResearchRunService:
         self.orchestrator = ResearchOrchestrator(
             index,
             searcher=searcher,
+            planner=planner,
             synthesis=synthesis,
             provider_manifest=provider_manifest,
         )

@@ -49,6 +49,14 @@ API endpoints:
 
 The default local providers are deterministic and require no credentials. Hosted embedding, reranking, and entailment services can be selected independently with the `EVIDENSIA_EMBEDDING_*`, `EVIDENSIA_RERANK_*`, and `EVIDENSIA_ENTAILMENT_*` variables shown in `.env.example`. `GET /v1/providers` reports the providers active in a running API instance.
 
+Set `OPENAI_API_KEY` to enable OpenAI-backed research planning, evidence-grounded claim synthesis, batch claim verification, and final report composition through the [Responses API](https://developers.openai.com/api/reference/responses). The default research model is `gpt-5.4-mini`; change `EVIDENSIA_OPENAI_MODEL` to use another compatible model. Model calls use strict JSON schemas, receive only bounded retrieved-evidence context, and fall back to the deterministic implementation after any timeout, refusal, provider error, or validation failure.
+
+```bash
+export OPENAI_API_KEY=your_key
+export EVIDENSIA_OPENAI_MODEL=gpt-5.4-mini
+uvicorn evidensia.api:app --port 8001 --reload
+```
+
 ## Implemented scope
 
 - PDF, Markdown, HTML, and text ingestion

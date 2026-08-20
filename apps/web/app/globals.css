@@ -83,6 +83,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .run-status.working { color: #8a7115; animation: pulse 1.4s ease-in-out infinite; }
 .run-heading h1 { max-width: 880px; margin: 0; font-family: Georgia, serif; font-size: clamp(27px, 3vw, 42px); line-height: 1.15; letter-spacing: -.025em; font-weight: 500; }
 .run-heading p { margin: 12px 0 0; color: var(--muted); font-size: 11px; }
+.model-chip { display: inline-flex; margin-top: 12px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--forest); background: rgba(194, 255, 61, .16); font: 700 10px/1 var(--mono); letter-spacing: .08em; }
 .live-grid { display: grid; grid-template-columns: 240px minmax(300px, 1fr) 280px; min-height: 535px; border: 1px solid #c8cec4; border-radius: 9px; background: var(--panel); overflow: hidden; }
 .live-grid > * { min-width: 0; padding: 20px; }
 .live-grid > * + * { border-left: 1px solid var(--line); }
