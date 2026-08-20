@@ -150,6 +150,8 @@ button, a { -webkit-tap-highlight-color: transparent; }
 /* Library and common pages */
 .page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; }
 .page-heading h1 { font-size: clamp(42px, 5vw, 66px); }
+.page-actions { display: flex; align-items: center; gap: 10px; }
+.library-banner { margin: 28px 0 -27px; padding: 12px 15px; border-left: 2px solid var(--acid); background: #e9eee5; color: #4f5c52; font-size: 9px; line-height: 1.5; }
 .library-stats { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 45px; border: 1px solid var(--line); border-radius: 8px 8px 0 0; background: #eceee7; }
 .library-stats div { display: flex; align-items: baseline; justify-content: space-between; padding: 19px 22px; }
 .library-stats div + div { border-left: 1px solid var(--line); }
@@ -167,6 +169,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .document-row small { display: block; margin-top: 5px; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; font-size: 8px; }
 .index-status { color: var(--green); font-size: 8px; font-weight: 800; text-transform: uppercase; }
 .index-status.indexing { color: #8a7115; }
+.index-status.demo { color: #8a7115; }
 
 /* Paper discovery */
 .discovery-form { margin-top: 40px; padding: 23px; border: 1px solid #c5cbc2; border-radius: 9px; background: var(--panel); box-shadow: 0 18px 45px rgba(35, 48, 38, .05); }
@@ -286,6 +289,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
   .capability-row article + article, .library-stats div + div { padding-left: 0; border-left: 0; }
   .library-stats div + div { border-top: 1px solid var(--line); }
   .page-heading { align-items: stretch; flex-direction: column; }
+  .page-actions { align-items: stretch; flex-direction: column; }
   .table-head { display: none; }
   .document-row { grid-template-columns: 1fr auto; }
   .document-row > span:not(.index-status) { display: none; }

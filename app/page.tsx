@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type View = "research" | "discover" | "library" | "debugger" | "evaluations";
 type Depth = "quick" | "standard" | "deep";
@@ -53,6 +53,22 @@ type DocumentItem = {
   chunks: number;
   status: string;
   topics: string[];
+};
+
+type LibraryConnection = "connecting" | "live" | "preview";
+
+type ApiDocumentRecord = {
+  document_id: string;
+  filename: string;
+  source_uri: string | null;
+  chunk_count: number;
+  status: string;
+  metadata: null | {
+    title: string;
+    document_type: string;
+    publication_year: number | null;
+    topics: string[];
+  };
 };
 
 type DiscoveredPaper = {
@@ -148,9 +164,9 @@ const demoRun: ResearchRun = {
 };
 
 const startingDocuments: DocumentItem[] = [
-  { id: "doc_01", title: "Agentic Retrieval for Multi-Hop Question Answering", type: "Research paper", year: 2025, chunks: 38, status: "Indexed", topics: ["Agentic RAG", "HotpotQA"] },
-  { id: "doc_02", title: "When Iterative Retrieval Does Not Help", type: "Research paper", year: 2025, chunks: 27, status: "Indexed", topics: ["Negative results", "FEVER"] },
-  { id: "doc_03", title: "Reliable Hybrid Retrieval Systems", type: "Technical report", year: 2024, chunks: 31, status: "Indexed", topics: ["BM25", "RRF", "Reranking"] },
+  { id: "doc_01", title: "Agentic Retrieval for Multi-Hop Question Answering", type: "Demo paper", year: 2025, chunks: 38, status: "Demo", topics: ["Agentic RAG", "HotpotQA"] },
+  { id: "doc_02", title: "When Iterative Retrieval Does Not Help", type: "Demo paper", year: 2025, chunks: 27, status: "Demo", topics: ["Negative results", "FEVER"] },
+  { id: "doc_03", title: "Reliable Hybrid Retrieval Systems", type: "Demo report", year: 2024, chunks: 31, status: "Demo", topics: ["BM25", "RRF", "Reranking"] },
 ];
 
 const demoDebug = {
@@ -164,6 +180,20 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function toDocumentItem(record: ApiDocumentRecord): DocumentItem {
+  const topics = record.metadata?.topics?.slice(0, 3) || [];
+  const isDemo = record.source_uri?.startsWith("demo://");
+  return {
+    id: record.document_id,
+    title: record.metadata?.title || record.filename,
+    type: isDemo ? "Demo source" : record.filename.endsWith(".pdf") ? "Full research paper" : "Paper abstract",
+    year: record.metadata?.publication_year || new Date().getFullYear(),
+    chunks: record.chunk_count,
+    status: isDemo ? "Demo" : record.status === "indexed" ? "Indexed" : record.status,
+    topics: topics.length ? topics : [isDemo ? "Example evidence" : "Discovered source"],
+  };
+}
+
 export default function Home() {
   const [view, setView] = useState<View>("research");
   const [question, setQuestion] = useState(initialQuestion);
@@ -173,6 +203,7 @@ export default function Home() {
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [selectedEvidence, setSelectedEvidence] = useState<Evidence | null>(null);
   const [documents, setDocuments] = useState(startingDocuments);
+  const [libraryConnection, setLibraryConnection] = useState<LibraryConnection>("connecting");
   const [discoveryQuery, setDiscoveryQuery] = useState("agentic RAG multi-hop question answering");
   const [dateFrom, setDateFrom] = useState("2025-01-01");
   const [dateTo, setDateTo] = useState(today);
@@ -186,6 +217,24 @@ export default function Home() {
   const [debugging, setDebugging] = useState(false);
   const [evalRunning, setEvalRunning] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    fetch(`${API_BASE}/v1/documents`)
+      .then((response) => {
+        if (!response.ok) throw new Error("Library request failed");
+        return response.json();
+      })
+      .then((records: ApiDocumentRecord[]) => {
+        if (!active) return;
+        setDocuments(records.map(toDocumentItem));
+        setLibraryConnection("live");
+      })
+      .catch(() => {
+        if (active) setLibraryConnection("preview");
+      });
+    return () => { active = false; };
+  }, []);
 
   async function startResearch(event: React.FormEvent) {
     event.preventDefault();
@@ -324,26 +373,15 @@ export default function Home() {
       const response = await fetch(`${API_BASE}/v1/sources/import`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ paper_ids: [...selectedPaperIds] }),
+        body: JSON.stringify({ paper_ids: [...selectedPaperIds], full_text: true }),
       });
       if (!response.ok) throw new Error("Import request failed");
       const result = await response.json();
-      const additions: DocumentItem[] = result.imported.map((record: {
-        document_id: string;
-        filename: string;
-        chunk_count: number;
-        metadata: null | { title: string; document_type: string; publication_year: number | null; topics: string[] };
-      }) => ({
-        id: record.document_id,
-        title: record.metadata?.title || record.filename,
-        type: record.metadata?.document_type === "research_paper" ? "Research paper" : "Paper abstract",
-        year: record.metadata?.publication_year || new Date().getFullYear(),
-        chunks: record.chunk_count,
-        status: "Indexed",
-        topics: record.metadata?.topics?.slice(0, 3) || ["Discovered source"],
-      }));
+      const additions: DocumentItem[] = result.imported.map(toDocumentItem);
       setDocuments((current) => [...additions, ...current.filter((document) => !additions.some((item) => item.id === document.id))]);
-      setDiscoveryNotice(`${additions.length} papers imported into the evidence library${result.skipped.length ? ` · ${result.skipped.length} already indexed` : ""}.`);
+      setLibraryConnection("live");
+      const fallbackCount = result.abstract_fallbacks?.length || 0;
+      setDiscoveryNotice(`${additions.length} papers ingested${fallbackCount ? ` · ${fallbackCount} used abstract fallback` : " with full text"}${result.skipped.length ? ` · ${result.skipped.length} already indexed` : ""}.`);
       setSelectedPaperIds(new Set());
     } catch {
       setDiscoveryNotice("The selected papers could not be imported. Check the API connection and retry.");
@@ -365,6 +403,7 @@ export default function Home() {
     { id: "debugger", label: "Retrieval debugger", icon: "≋" },
     { id: "evaluations", label: "Evaluations", icon: "◇" },
   ];
+  const indexedDocuments = documents.filter((document) => document.status !== "Demo");
 
   return (
     <main className="studio-shell">
@@ -382,7 +421,7 @@ export default function Home() {
         <div className="corpus-card">
           <span className="micro-label">ACTIVE CORPUS</span>
           <strong>Open research</strong>
-          <small>{documents.length} sources · {documents.reduce((sum, item) => sum + item.chunks, 0)} chunks</small>
+          <small>{indexedDocuments.length} indexed · {indexedDocuments.reduce((sum, item) => sum + item.chunks, 0)} chunks</small>
         </div>
         <div className="nav-foot"><span className="status-dot" /> Evidence engine ready</div>
       </aside>
@@ -432,7 +471,7 @@ export default function Home() {
             onImport={importDiscoveredPapers}
           />
         )}
-        {view === "library" && <LibraryView documents={documents} onImport={() => fileRef.current?.click()} />}
+        {view === "library" && <LibraryView documents={documents} connection={libraryConnection} onImport={() => fileRef.current?.click()} onDiscover={() => setView("discover")} />}
         {view === "debugger" && <DebuggerView query={debugQuery} setQuery={setDebugQuery} loading={debugging} onRun={runDebug} />}
         {view === "evaluations" && <EvaluationsView running={evalRunning} onRun={runEvaluation} />}
       </section>
@@ -464,7 +503,7 @@ function DiscoveryView(props: {
         <div>
           <span className="signal"><i /> LIVE SCHOLARLY SOURCES</span>
           <h1>Discover papers</h1>
-          <p>Search recent AI research across arXiv and OpenAlex, review provenance, then index selected abstracts for evidence retrieval.</p>
+          <p>Search recent AI research across arXiv and OpenAlex. Evidensia extracts full arXiv PDFs when available and uses a clearly marked abstract fallback for other sources.</p>
         </div>
       </div>
 
@@ -493,7 +532,7 @@ function DiscoveryView(props: {
       <div className="discovery-toolbar">
         <div><span className="micro-label">DISCOVERY RESULTS</span><strong>{props.papers.length || "—"}</strong></div>
         <button className="ghost-button" type="button" disabled={props.selectedPaperIds.size === 0 || props.importing} onClick={props.onImport}>
-          {props.importing ? "Indexing…" : `Index selected (${props.selectedPaperIds.size})`}
+          {props.importing ? "Extracting…" : `Ingest selected (${props.selectedPaperIds.size})`}
         </button>
       </div>
 
@@ -509,6 +548,7 @@ function DiscoveryView(props: {
                   <span>{paper.providers.map((provider) => provider === "arxiv" ? "arXiv" : "OpenAlex").join(" + ")}</span>
                   <span>{paper.published_at}</span>
                   <span>{paper.open_access ? "Open access" : "Access unknown"}</span>
+                  <span>{paper.providers.includes("arxiv") ? "Full text ready" : "Abstract metadata"}</span>
                   {paper.citation_count !== null && <span>{paper.citation_count} citations</span>}
                 </div>
                 <h2>{paper.title}</h2>
@@ -650,11 +690,15 @@ function ReportView({ run }: { run: ResearchRun }) {
   );
 }
 
-function LibraryView({ documents, onImport }: { documents: DocumentItem[]; onImport: () => void }) {
+function LibraryView({ documents, connection, onImport, onDiscover }: { documents: DocumentItem[]; connection: LibraryConnection; onImport: () => void; onDiscover: () => void }) {
+  const indexed = documents.filter((document) => document.status !== "Demo");
+  const demos = documents.filter((document) => document.status === "Demo");
   return (
     <div className="page-canvas">
-      <div className="page-heading"><div><span className="signal"><i /> KNOWLEDGE FOUNDATION</span><h1>Source library</h1><p>Every indexed source is parsed into section-aware parent context and retrieval chunks.</p></div><button className="primary-button" onClick={onImport}>＋ Import source</button></div>
-      <div className="library-stats"><div><span>Sources</span><strong>{documents.length}</strong></div><div><span>Retrieval chunks</span><strong>{documents.reduce((sum, item) => sum + item.chunks, 0)}</strong></div><div><span>Index health</span><strong className="green-text">Ready</strong></div></div>
+      <div className="page-heading"><div><span className="signal"><i /> KNOWLEDGE FOUNDATION</span><h1>Source library</h1><p>Every indexed source is parsed into section-aware parent context and retrieval chunks.</p></div><div className="page-actions"><button className="ghost-button" onClick={onImport}>＋ Upload file</button><button className="primary-button" onClick={onDiscover}>Discover papers<span>→</span></button></div></div>
+      {connection === "preview" && <p className="library-banner">The three rows below are demonstration sources. Start the Evidensia API and use Discover papers to build a live corpus.</p>}
+      {connection === "live" && demos.length > 0 && indexed.length === 0 && <p className="library-banner">The API is connected, but only demo sources are loaded. Open Discover papers, search a topic, and ingest the selected results.</p>}
+      <div className="library-stats"><div><span>Indexed sources</span><strong>{indexed.length}</strong></div><div><span>Retrieval chunks</span><strong>{indexed.reduce((sum, item) => sum + item.chunks, 0)}</strong></div><div><span>Library</span><strong className="green-text">{connection === "live" ? "Connected" : connection === "connecting" ? "Connecting" : "Preview"}</strong></div></div>
       <div className="document-table"><div className="table-head"><span>Source</span><span>Type</span><span>Year</span><span>Chunks</span><span>Status</span></div>{documents.map((document) => <div className="document-row" key={document.id}><div><span className="doc-icon">▤</span><div><strong>{document.title}</strong><small>{document.topics.join(" · ")}</small></div></div><span>{document.type}</span><span>{document.year}</span><span>{document.chunks}</span><span className={`index-status ${document.status.toLowerCase()}`}>● {document.status}</span></div>)}</div>
     </div>
   );
