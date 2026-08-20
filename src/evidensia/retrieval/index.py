@@ -5,13 +5,15 @@ from collections import Counter
 from collections.abc import Iterable
 
 from evidensia.models import ChunkRecord
-from evidensia.retrieval.text import cosine, hashed_vector, term_frequencies, tokenize
+from evidensia.providers import EmbeddingProvider, HashedEmbeddingProvider
+from evidensia.retrieval.text import cosine, term_frequencies, tokenize
 
 
 class LocalKnowledgeIndex:
     """Auditable in-process dense + BM25 index for development and evaluation."""
 
-    def __init__(self) -> None:
+    def __init__(self, embedding_provider: EmbeddingProvider | None = None) -> None:
+        self.embedding_provider = embedding_provider or HashedEmbeddingProvider()
         self._chunks: dict[str, ChunkRecord] = {}
         self._vectors: dict[str, dict[int, float]] = {}
         self._terms: dict[str, Counter[str]] = {}
@@ -23,7 +25,7 @@ class LocalKnowledgeIndex:
             if chunk.chunk_type != "retrieval":
                 continue
             self._chunks[chunk.chunk_id] = chunk
-            self._vectors[chunk.chunk_id] = hashed_vector(self._searchable_text(chunk))
+            self._vectors[chunk.chunk_id] = self.embedding_provider.embed(self._searchable_text(chunk))
             self._terms[chunk.chunk_id] = term_frequencies(self._searchable_text(chunk))
         self._refresh_statistics()
 
@@ -48,7 +50,7 @@ class LocalKnowledgeIndex:
         limit: int = 30,
         filters: dict[str, str | int | list[str]] | None = None,
     ) -> list[tuple[ChunkRecord, float]]:
-        vector = hashed_vector(query)
+        vector = self.embedding_provider.embed(query)
         scored = [
             (chunk, cosine(vector, self._vectors[chunk_id]))
             for chunk_id, chunk in self._chunks.items()
@@ -102,6 +104,23 @@ class LocalKnowledgeIndex:
         if not filters:
             return True
         for key, expected in filters.items():
+            if key == "document_ids":
+                if chunk.document_id not in set(map(str, expected if isinstance(expected, list) else [expected])):
+                    return False
+                continue
+            if key == "publication_year_gte":
+                if chunk.publication_year is None or chunk.publication_year < int(expected):
+                    return False
+                continue
+            if key == "publication_year_lte":
+                if chunk.publication_year is None or chunk.publication_year > int(expected):
+                    return False
+                continue
+            if key == "allowed_sources":
+                allowed = list(map(str, expected if isinstance(expected, list) else [expected]))
+                if not chunk.source_uri or not any(chunk.source_uri.startswith(value) for value in allowed):
+                    return False
+                continue
             actual = getattr(chunk, key, None)
             if isinstance(expected, list):
                 actual_values = actual if isinstance(actual, list) else [actual]
@@ -113,4 +132,3 @@ class LocalKnowledgeIndex:
             elif actual != expected:
                 return False
         return True
-

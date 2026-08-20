@@ -6,7 +6,7 @@ from collections.abc import Sequence, Set
 
 def recall_at_k(ranked_ids: Sequence[str], relevant_ids: Set[str], k: int) -> float:
     if not relevant_ids:
-        return 1.0
+        return 0.0
     return len(set(ranked_ids[:k]) & relevant_ids) / len(relevant_ids)
 
 
@@ -34,9 +34,8 @@ def ndcg_at_k(ranked_ids: Sequence[str], relevant_ids: Set[str], k: int) -> floa
     dcg = sum(gain / math.log2(index + 2) for index, gain in enumerate(gains))
     ideal_count = min(k, len(relevant_ids))
     ideal = sum(1 / math.log2(index + 2) for index in range(ideal_count))
-    return dcg / ideal if ideal else 1.0
+    return dcg / ideal if ideal else 0.0
 
 
 def hit_rate(ranked_ids: Sequence[str], relevant_ids: Set[str], k: int) -> float:
     return float(bool(set(ranked_ids[:k]) & relevant_ids))
-

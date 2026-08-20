@@ -3,11 +3,15 @@ from __future__ import annotations
 import hashlib
 
 from evidensia.models import CitationVerification, Evidence, ResearchClaim, ResearchReport
+from evidensia.providers import EntailmentProvider, LexicalEntailmentProvider
 from evidensia.retrieval.index import LocalKnowledgeIndex
 from evidensia.retrieval.text import tokenize
 
 
 class SynthesisEngine:
+    def __init__(self, entailment: EntailmentProvider | None = None) -> None:
+        self.entailment = entailment or LexicalEntailmentProvider()
+
     def build_claims(self, evidence: list[Evidence]) -> list[ResearchClaim]:
         claims: list[ResearchClaim] = []
         support = sorted(
@@ -65,17 +69,17 @@ class SynthesisEngine:
                     continue
                 chunk = index.get(item.citation.chunk_id)
                 valid = chunk is not None and chunk.document_id == item.citation.document_id
-                entails = valid and (
-                    item.supporting_text.lower() in chunk.text.lower()
-                    or self._overlap(claim.statement, chunk.text) >= 0.18
-                )
+                entails, entailment_score = self.entailment.check(claim.statement, chunk.text) if valid else (False, 0.0)
+                if valid and item.supporting_text.lower() in chunk.text.lower():
+                    entails = True
+                    entailment_score = max(entailment_score, 0.95)
                 checks.append(
                     CitationVerification(
                         claim_id=claim.claim_id,
                         citation_id=item.citation.citation_id,
                         valid_source=valid,
                         entails_claim=entails,
-                        citation_quality=(item.source_quality * 0.5 + item.relevance * 0.5) if valid and entails else 0,
+                        citation_quality=(item.source_quality * 0.4 + item.relevance * 0.35 + entailment_score * 0.25) if valid and entails else 0,
                         issue=None if valid and entails else ("Source chunk was not found" if not valid else "Source does not sufficiently entail the claim"),
                     )
                 )

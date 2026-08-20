@@ -15,6 +15,9 @@ class GraphState(TypedDict, total=False):
     run_id: str
     question: str
     depth: Literal["quick", "standard", "deep"]
+    namespace: str
+    metadata_filters: dict[str, str | int | list[str]]
+    provider_manifest: dict[str, str]
     research_plan: dict[str, Any] | None
     sub_questions: list[dict[str, Any]]
     search_queries: list[str]
@@ -34,18 +37,41 @@ class GraphState(TypedDict, total=False):
 class ResearchOrchestrator:
     """LangGraph corrective-retrieval workflow with validated node boundaries."""
 
-    def __init__(self, index: LocalKnowledgeIndex, searcher: HybridSearcher | None = None) -> None:
+    def __init__(
+        self,
+        index: LocalKnowledgeIndex,
+        searcher: HybridSearcher | None = None,
+        synthesis: SynthesisEngine | None = None,
+        provider_manifest: dict[str, str] | None = None,
+    ) -> None:
         self.index = index
         self.searcher = searcher or HybridSearcher(index)
         self.planner = ResearchPlanner()
         self.extractor = EvidenceExtractor()
         self.sufficiency = SufficiencyEvaluator()
-        self.synthesis = SynthesisEngine()
+        self.synthesis = synthesis or SynthesisEngine()
+        self.provider_manifest = provider_manifest or {}
         self.graph = self._build_graph()
 
-    def initial_state(self, run_id: str, question: str, depth: str) -> ResearchState:
+    def initial_state(
+        self,
+        run_id: str,
+        question: str,
+        depth: str,
+        *,
+        namespace: str = "open-research",
+        metadata_filters: dict[str, str | int | list[str]] | None = None,
+    ) -> ResearchState:
         max_iterations = {"quick": 1, "standard": 3, "deep": 4}[depth]
-        return ResearchState(run_id=run_id, question=question, depth=depth, max_iterations=max_iterations)
+        return ResearchState(
+            run_id=run_id,
+            question=question,
+            depth=depth,
+            namespace=namespace,
+            metadata_filters=metadata_filters or {},
+            provider_manifest=self.provider_manifest,
+            max_iterations=max_iterations,
+        )
 
     def run(
         self,
@@ -105,7 +131,7 @@ class ResearchOrchestrator:
             target = next((item for item in validated.sub_questions if item.question == query), None)
             if target is None:
                 target = open_questions[index % len(open_questions)] if open_questions else validated.sub_questions[min(index, len(validated.sub_questions) - 1)]
-            debug = self.searcher.search(query, limit=5)
+            debug = self.searcher.search(query, limit=5, metadata_filters=validated.metadata_filters)
             for item in self.extractor.extract(target, debug.reranked, limit=3):
                 if item.evidence_id not in existing:
                     evidence.append(item)
@@ -212,4 +238,3 @@ class ResearchOrchestrator:
         if node == "verify":
             return {"confidence": state.confidence, "claim_count": len(state.claims)}
         return {}
-

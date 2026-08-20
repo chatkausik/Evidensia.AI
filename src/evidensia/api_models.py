@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
-from evidensia.models import EvaluationCase, PaperDiscoveryRequest, StrictModel
+from evidensia.models import EvaluationCase, PaperDiscoveryRequest, PaperProvider, StrictModel
 
 
 class SearchRequest(StrictModel):
@@ -14,10 +15,11 @@ class SearchRequest(StrictModel):
 
 
 class EvaluationRequest(StrictModel):
-    cases: list[EvaluationCase]
+    cases: list[EvaluationCase] = Field(default_factory=list)
     pipeline: Literal["dense", "sparse", "hybrid", "reranked"] = "reranked"
     k: int = Field(default=10, ge=1, le=100)
     run_ablation: bool = False
+    dataset_name: str = Field(default="ad-hoc", min_length=1, max_length=120)
 
 
 class FeedbackRequest(StrictModel):
@@ -40,6 +42,34 @@ class PaperImportRequest(StrictModel):
     full_text: bool = True
 
 
+class PaperCompareRequest(StrictModel):
+    paper_ids: list[str] = Field(min_length=2, max_length=12)
+
+
+class SavedSearchRequest(StrictModel):
+    name: str = Field(min_length=2, max_length=120)
+    query: str = Field(min_length=2, max_length=500)
+    date_from: date
+    date_to: date
+    providers: list[PaperProvider] = Field(min_length=1)
+    categories: list[str] = Field(default_factory=list, max_length=20)
+    open_access_only: bool = True
+
+    @model_validator(mode="after")
+    def valid_date_range(self) -> SavedSearchRequest:
+        if self.date_from > self.date_to:
+            raise ValueError("date_from must be on or before date_to")
+        self.providers = list(dict.fromkeys(self.providers))
+        self.categories = list(dict.fromkeys(self.categories))
+        return self
+
+
+class CollectionRequest(StrictModel):
+    name: str = Field(min_length=2, max_length=120)
+    description: str = Field(default="", max_length=1000)
+    document_ids: list[str] = Field(default_factory=list, max_length=1000)
+
+
 __all__ = [
     "EvaluationRequest",
     "FeedbackRequest",
@@ -47,5 +77,8 @@ __all__ = [
     "HealthResponse",
     "PaperDiscoveryRequest",
     "PaperImportRequest",
+    "PaperCompareRequest",
+    "SavedSearchRequest",
+    "CollectionRequest",
     "SearchRequest",
 ]

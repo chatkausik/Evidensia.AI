@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 type View = "research" | "discover" | "library" | "debugger" | "evaluations";
 type Depth = "quick" | "standard" | "deep";
-type PaperProvider = "arxiv" | "openalex";
+type PaperProvider = "arxiv" | "openalex" | "semantic_scholar" | "crossref";
 
 type Citation = {
   citation_id: string;
@@ -93,6 +93,79 @@ type DiscoveryResponse = {
   warnings: string[];
 };
 
+type DebugRank = {
+  chunk: { chunk_id: string; title: string; section: string };
+  dense_rank: number | null;
+  sparse_rank: number | null;
+  rrf_score: number;
+  rerank_score: number;
+  final_score: number;
+  final_rank: number;
+};
+
+type DebugResult = {
+  query: string;
+  intent: { intent: string; keyword_specificity: number; requires_multi_hop: boolean };
+  dense: DebugRank[];
+  sparse: DebugRank[];
+  fused: DebugRank[];
+  reranked: DebugRank[];
+  duration_ms: number;
+};
+
+type Experiment = {
+  name: string;
+  cases: number;
+  k: number;
+  metrics: {
+    recall_at_k: number;
+    precision_at_k: number;
+    mrr: number;
+    ndcg_at_k: number;
+    hit_rate: number;
+    document_recall_at_k: number;
+    answer_coverage: number;
+    claim_coverage: number;
+  };
+  duration_ms: number;
+};
+
+type SavedSearch = {
+  search_id: string;
+  name: string;
+  query: string;
+  date_from: string;
+  date_to: string;
+  providers: PaperProvider[];
+  last_run_at: string | null;
+};
+
+type ResearchCollection = {
+  collection_id: string;
+  name: string;
+  description: string;
+  document_ids: string[];
+};
+
+type ComparisonRow = {
+  paper_id: string;
+  title: string;
+  providers: PaperProvider[];
+  publication_year: number;
+  venue: string | null;
+  citation_count: number | null;
+  open_access: boolean;
+  topics: string[];
+  methods: string[];
+  datasets: string[];
+};
+
+type CitationGraph = {
+  root_id: string;
+  nodes: Array<{ paper_id: string; title: string; year: number | null; citation_count: number | null; url: string | null }>;
+  edges: Array<{ source: string; target: string; relation: "references" | "cited_by" }>;
+};
+
 type TimelineItem = { type: string; title: string; detail: string; state: "done" | "active" | "waiting" };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
@@ -100,84 +173,18 @@ const today = new Date().toISOString().slice(0, 10);
 
 const initialQuestion = "Does agentic RAG significantly outperform traditional RAG for multi-hop enterprise question answering?";
 
-const demoEvidence: Evidence[] = [
-  {
-    evidence_id: "ev_benchmark",
-    claim: "On HotpotQA, the agentic system improved exact match from 61.2 to 69.8 and Recall@10 from 78.4 to 89.1.",
-    supporting_text: "Gains were concentrated in questions that required evidence from three or more passages.",
-    evidence_type: "supporting",
-    relevance: 0.96,
-    confidence: 0.91,
-    citation: { citation_id: "cit_1", title: "Agentic Retrieval for Multi-Hop Question Answering", section: "Results", page: 7, source_uri: "demo://agentic-rag-benchmark-2025.md", quoted_text: "On HotpotQA, the agentic system improved exact match from 61.2 to 69.8 and Recall@10 from 78.4 to 89.1." },
-  },
-  {
-    evidence_id: "ev_negative",
-    claim: "The difference on FEVER was not statistically significant after controlling for reranking quality.",
-    supporting_text: "On the support corpus, repeated retrieval introduced irrelevant passages and answer accuracy declined by 1.4 points.",
-    evidence_type: "contradicting",
-    relevance: 0.9,
-    confidence: 0.87,
-    citation: { citation_id: "cit_2", title: "When Iterative Retrieval Does Not Help", section: "Evaluation", page: 4, source_uri: "demo://negative-results-2025.md", quoted_text: "The difference on FEVER was not statistically significant after controlling for reranking quality." },
-  },
-  {
-    evidence_id: "ev_cost",
-    claim: "Median latency increased from 1.8 seconds to 5.1 seconds and model calls rose 2.7×.",
-    supporting_text: "The largest gains appeared on complex multi-hop questions, while single-hop gains were below one point.",
-    evidence_type: "supporting",
-    relevance: 0.93,
-    confidence: 0.89,
-    citation: { citation_id: "cit_3", title: "Agentic Retrieval for Multi-Hop Question Answering", section: "Costs and limitations", page: 9, source_uri: "demo://agentic-rag-benchmark-2025.md", quoted_text: "The agentic system required 2.7 times more model calls and median latency increased from 1.8 seconds to 5.1 seconds." },
-  },
-];
-
-const demoRun: ResearchRun = {
-  run_id: "run_demo_01",
-  question: initialQuestion,
-  status: "completed",
-  confidence: 0.87,
-  iterations: 2,
-  sub_questions: [
-    { id: "sq_1", question: "How do the two retrieval approaches differ?", purpose: "Establish comparison baselines", completed: true },
-    { id: "sq_2", question: "Which benchmarks directly compare them?", purpose: "Find measurable outcomes", completed: true },
-    { id: "sq_3", question: "What latency and cost penalties occur?", purpose: "Quantify trade-offs", completed: true },
-    { id: "sq_4", question: "Which studies disagree or qualify the premise?", purpose: "Find counter-evidence", completed: true },
-  ],
-  retrieved_evidence: demoEvidence,
-  final_report: {
-    executive_summary: "Agentic RAG shows meaningful gains on complex multi-hop questions when the initial retrieval is weak, but it does not consistently outperform a well-tuned hybrid baseline on simpler tasks.",
-    conclusion: "The advantage is conditional rather than universal: better recovery and multi-step evidence gathering come with materially higher latency, model usage, and exposure to query drift.",
-    key_findings: [
-      "HotpotQA Recall@10 increased from 78.4 to 89.1 in a direct comparison.",
-      "Most gains were concentrated in questions requiring three or more evidence passages.",
-      "A separate FEVER evaluation found no statistically significant improvement after controlling for reranking.",
-      "Median latency rose from 1.8s to 5.1s and model calls increased 2.7×.",
-    ],
-    limitations: ["The available studies cover a small number of public and enterprise corpora.", "Agent quality is sensitive to stopping rules and query drift."],
-    unresolved_questions: ["How do access controls and rapidly changing corpora affect retrieval recovery?"],
-    confidence_score: 0.87,
-    sources: demoEvidence.map((item) => item.citation),
-    claims: [
-      { claim_id: "claim_1", statement: "Agentic retrieval improves complex multi-hop evidence recall.", status: "supported", confidence: 0.91, evidence_ids: ["ev_benchmark"], opposing_evidence_ids: ["ev_negative"] },
-      { claim_id: "claim_2", statement: "The improvement carries substantial latency and model-call costs.", status: "supported", confidence: 0.89, evidence_ids: ["ev_cost"], opposing_evidence_ids: [] },
-    ],
-  },
-};
-
 const startingDocuments: DocumentItem[] = [
   { id: "doc_01", title: "Agentic Retrieval for Multi-Hop Question Answering", type: "Demo paper", year: 2025, chunks: 38, status: "Demo", topics: ["Agentic RAG", "HotpotQA"] },
   { id: "doc_02", title: "When Iterative Retrieval Does Not Help", type: "Demo paper", year: 2025, chunks: 27, status: "Demo", topics: ["Negative results", "FEVER"] },
   { id: "doc_03", title: "Reliable Hybrid Retrieval Systems", type: "Demo report", year: 2024, chunks: 31, status: "Demo", topics: ["BM25", "RRF", "Reranking"] },
 ];
 
-const demoDebug = {
-  dense: [{ id: "chk_992", score: 0.91 }, { id: "chk_144", score: 0.86 }, { id: "chk_501", score: 0.79 }],
-  sparse: [{ id: "chk_144", score: 12.4 }, { id: "chk_992", score: 10.8 }, { id: "chk_731", score: 8.6 }],
-  fused: [{ id: "chk_144", score: 0.0325 }, { id: "chk_992", score: 0.0323 }, { id: "chk_501", score: 0.0159 }],
-  reranked: [{ id: "chk_992", score: 0.97 }, { id: "chk_144", score: 0.94 }, { id: "chk_501", score: 0.82 }],
-};
-
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function providerLabel(provider: PaperProvider) {
+  return ({ arxiv: "arXiv", openalex: "OpenAlex", semantic_scholar: "Semantic Scholar", crossref: "Crossref" })[provider];
 }
 
 function toDocumentItem(record: ApiDocumentRecord): DocumentItem {
@@ -207,7 +214,7 @@ export default function Home() {
   const [discoveryQuery, setDiscoveryQuery] = useState("agentic RAG multi-hop question answering");
   const [dateFrom, setDateFrom] = useState("2025-01-01");
   const [dateTo, setDateTo] = useState(today);
-  const [paperProviders, setPaperProviders] = useState<PaperProvider[]>(["arxiv", "openalex"]);
+  const [paperProviders, setPaperProviders] = useState<PaperProvider[]>(["arxiv", "openalex", "semantic_scholar", "crossref"]);
   const [discoveredPapers, setDiscoveredPapers] = useState<DiscoveredPaper[]>([]);
   const [selectedPaperIds, setSelectedPaperIds] = useState<Set<string>>(new Set());
   const [discovering, setDiscovering] = useState(false);
@@ -215,7 +222,15 @@ export default function Home() {
   const [discoveryNotice, setDiscoveryNotice] = useState("");
   const [debugQuery, setDebugQuery] = useState("Agentic RAG multi-hop HotpotQA");
   const [debugging, setDebugging] = useState(false);
+  const [debugResult, setDebugResult] = useState<DebugResult | null>(null);
   const [evalRunning, setEvalRunning] = useState(false);
+  const [experiments, setExperiments] = useState<Experiment[]>([]);
+  const [savedSearches, setSavedSearches] = useState<SavedSearch[]>([]);
+  const [collections, setCollections] = useState<ResearchCollection[]>([]);
+  const [namespace, setNamespace] = useState("open-research");
+  const [comparison, setComparison] = useState<ComparisonRow[]>([]);
+  const [citationGraph, setCitationGraph] = useState<CitationGraph | null>(null);
+  const [researchError, setResearchError] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -233,6 +248,9 @@ export default function Home() {
       .catch(() => {
         if (active) setLibraryConnection("preview");
       });
+    fetch(`${API_BASE}/v1/saved-searches`).then((response) => response.ok ? response.json() : []).then((items: SavedSearch[]) => { if (active) setSavedSearches(items); }).catch(() => undefined);
+    fetch(`${API_BASE}/v1/evals/experiments`).then((response) => response.ok ? response.json() : []).then((items: Experiment[]) => { if (active) setExperiments(items); }).catch(() => undefined);
+    fetch(`${API_BASE}/v1/collections`).then((response) => response.ok ? response.json() : []).then((items: ResearchCollection[]) => { if (active) setCollections(items); }).catch(() => undefined);
     return () => { active = false; };
   }, []);
 
@@ -241,6 +259,7 @@ export default function Home() {
     if (question.trim().length < 8 || running) return;
     setRunning(true);
     setRun(null);
+    setResearchError("");
     setSelectedEvidence(null);
     const steps: TimelineItem[] = [
       { type: "plan", title: "Research plan created", detail: "5 focused questions · 3 hypotheses", state: "active" },
@@ -249,30 +268,77 @@ export default function Home() {
       { type: "verify", title: "Claim and citation verification", detail: "Exact passage validation", state: "waiting" },
     ];
     setTimeline(steps);
-    await sleep(420);
-    setTimeline(steps.map((item, index) => ({ ...item, state: index === 0 ? "done" : index === 1 ? "active" : "waiting" })));
-    await sleep(520);
-    setTimeline(steps.map((item, index) => ({ ...item, state: index < 2 ? "done" : index === 2 ? "active" : "waiting" })));
-
-    let result: ResearchRun | null = null;
     try {
       const response = await fetch(`${API_BASE}/v1/research`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, depth, namespace: "open-research", run_synchronously: true }),
+        body: JSON.stringify({ question, depth, namespace, date_from: dateFrom, date_to: dateTo, run_synchronously: false }),
       });
-      if (response.ok) result = await response.json();
-    } catch {
-      result = null;
+      if (!response.ok) throw new Error("Research request failed");
+      const initial: ResearchRun = await response.json();
+      setRun(initial);
+      await new Promise<void>((resolve, reject) => {
+        const stream = new EventSource(`${API_BASE}/v1/research/${initial.run_id}/events?stream=true`);
+        const timeout = window.setTimeout(() => { stream.close(); reject(new Error("Research stream timed out")); }, 120000);
+        const advance = (position: number, detail?: string) => {
+          setTimeline(steps.map((item, index) => ({
+            ...item,
+            detail: index === position && detail ? detail : item.detail,
+            state: index < position ? "done" : index === position ? "active" : "waiting",
+          })));
+        };
+        const refresh = async () => {
+          const current = await fetch(`${API_BASE}/v1/research/${initial.run_id}`);
+          if (current.ok) setRun(await current.json());
+        };
+        stream.addEventListener("plan.created", (message) => {
+          const event = JSON.parse((message as MessageEvent).data);
+          advance(1, event.message);
+        });
+        stream.addEventListener("retrieval.completed", (message) => {
+          const event = JSON.parse((message as MessageEvent).data);
+          advance(2, event.message);
+          void refresh();
+        });
+        stream.addEventListener("retrieval.retry", (message) => {
+          const event = JSON.parse((message as MessageEvent).data);
+          advance(2, event.message);
+        });
+        stream.addEventListener("synthesis.started", (message) => {
+          const event = JSON.parse((message as MessageEvent).data);
+          advance(3, event.message);
+        });
+        stream.addEventListener("research.completed", async () => {
+          window.clearTimeout(timeout);
+          setTimeline(steps.map((item) => ({ ...item, state: "done" })));
+          await refresh();
+          stream.close();
+          resolve();
+        });
+        stream.addEventListener("research.failed", (message) => {
+          window.clearTimeout(timeout);
+          stream.close();
+          reject(new Error(JSON.parse((message as MessageEvent).data).message));
+        });
+        stream.onerror = () => {
+          window.clearTimeout(timeout);
+          stream.close();
+          reject(new Error("The live research stream disconnected."));
+        };
+      });
+      const final = await fetch(`${API_BASE}/v1/research/${initial.run_id}`);
+      if (final.ok) {
+        const result: ResearchRun = await final.json();
+        setRun(result);
+        setSelectedEvidence(result.retrieved_evidence[0] || null);
+      }
+    } catch (error) {
+      setResearchError(error instanceof Error ? error.message : "The research service is unavailable.");
+      setRun(null);
+      setTimeline([]);
+    } finally {
+      setRunning(false);
     }
-    await sleep(430);
-    setTimeline(steps.map((item, index) => ({ ...item, state: index < 3 ? "done" : "active" })));
-    await sleep(420);
-    result ||= { ...demoRun, question, run_id: `demo_${Date.now()}` };
-    setRun(result);
-    setSelectedEvidence(result.retrieved_evidence[0] || null);
-    setTimeline(steps.map((item) => ({ ...item, state: "done" })));
-    setRunning(false);
   }
 
   async function importSource(event: React.ChangeEvent<HTMLInputElement>) {
@@ -316,8 +382,17 @@ export default function Home() {
   async function runDebug(event: React.FormEvent) {
     event.preventDefault();
     setDebugging(true);
-    await sleep(650);
-    setDebugging(false);
+    try {
+      const response = await fetch(`${API_BASE}/v1/search/debug`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: debugQuery, limit: 8 }),
+      });
+      if (!response.ok) throw new Error("Debug request failed");
+      setDebugResult(await response.json());
+    } finally {
+      setDebugging(false);
+    }
   }
 
   function toggleProvider(provider: PaperProvider) {
@@ -390,10 +465,93 @@ export default function Home() {
     }
   }
 
+  async function saveCurrentSearch() {
+    const response = await fetch(`${API_BASE}/v1/saved-searches`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: discoveryQuery.slice(0, 90),
+        query: discoveryQuery,
+        date_from: dateFrom,
+        date_to: dateTo,
+        providers: paperProviders,
+        categories: [],
+        open_access_only: true,
+      }),
+    });
+    if (response.ok) {
+      const saved: SavedSearch = await response.json();
+      setSavedSearches((items) => [saved, ...items]);
+      setDiscoveryNotice(`Saved “${saved.name}” for repeat discovery.`);
+    }
+  }
+
+  async function runSavedSearch(saved: SavedSearch) {
+    setDiscoveryQuery(saved.query);
+    setDateFrom(saved.date_from);
+    setDateTo(saved.date_to);
+    setPaperProviders(saved.providers);
+    setDiscovering(true);
+    try {
+      const response = await fetch(`${API_BASE}/v1/saved-searches/${saved.search_id}/run`, { method: "POST" });
+      if (!response.ok) throw new Error("Saved search failed");
+      const result: DiscoveryResponse = await response.json();
+      setDiscoveredPapers(result.papers);
+      setSelectedPaperIds(new Set(result.papers.slice(0, 5).map((paper) => paper.paper_id)));
+      setDiscoveryNotice(`${result.papers.length} updated papers found.`);
+    } finally {
+      setDiscovering(false);
+    }
+  }
+
+  async function compareSelectedPapers() {
+    if (selectedPaperIds.size < 2) return;
+    const response = await fetch(`${API_BASE}/v1/sources/compare`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paper_ids: [...selectedPaperIds] }),
+    });
+    if (response.ok) setComparison(await response.json());
+  }
+
+  async function loadCitationGraph(paperId: string) {
+    const response = await fetch(`${API_BASE}/v1/sources/${encodeURIComponent(paperId)}/citation-graph?limit=8`);
+    if (response.ok) {
+      const graph: CitationGraph = await response.json();
+      setCitationGraph(graph);
+      setDiscoveryNotice(graph.nodes.length > 1 ? `${graph.nodes.length} papers mapped in the citation neighborhood.` : "No Semantic Scholar citation graph is available for this paper yet.");
+    }
+  }
+
   async function runEvaluation() {
     setEvalRunning(true);
-    await sleep(950);
-    setEvalRunning(false);
+    try {
+      const response = await fetch(`${API_BASE}/v1/evals/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ run_ablation: true, dataset_name: "sample-v2", k: 10 }),
+      });
+      if (!response.ok) throw new Error("Evaluation failed");
+      const results: Experiment[] = await response.json();
+      setExperiments((items) => [...results, ...items]);
+    } finally {
+      setEvalRunning(false);
+    }
+  }
+
+  async function createCollectionFromLibrary() {
+    const documentIds = documents.filter((document) => document.status !== "Demo" && document.status !== "Indexing").map((document) => document.id);
+    if (documentIds.length === 0) return;
+    const response = await fetch(`${API_BASE}/v1/collections`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: `Evidence set ${collections.length + 1}`, description: "Saved from the Research Studio source library", document_ids: documentIds }),
+    });
+    if (response.ok) {
+      const collection: ResearchCollection = await response.json();
+      setCollections((items) => [collection, ...items]);
+      setNamespace(collection.collection_id);
+    }
   }
 
   const navItems: Array<{ id: View; label: string; icon: string }> = [
@@ -442,7 +600,11 @@ export default function Home() {
             setQuestion={setQuestion}
             depth={depth}
             setDepth={setDepth}
+            namespace={namespace}
+            setNamespace={setNamespace}
+            collections={collections}
             running={running}
+            error={researchError}
             run={run}
             timeline={timeline}
             selectedEvidence={selectedEvidence}
@@ -467,13 +629,20 @@ export default function Home() {
             discovering={discovering}
             importing={importingPapers}
             notice={discoveryNotice}
+            savedSearches={savedSearches}
+            comparison={comparison}
+            citationGraph={citationGraph}
             onDiscover={discoverPapers}
             onImport={importDiscoveredPapers}
+            onSave={saveCurrentSearch}
+            onRunSaved={runSavedSearch}
+            onCompare={compareSelectedPapers}
+            onCitationGraph={loadCitationGraph}
           />
         )}
-        {view === "library" && <LibraryView documents={documents} connection={libraryConnection} onImport={() => fileRef.current?.click()} onDiscover={() => setView("discover")} />}
-        {view === "debugger" && <DebuggerView query={debugQuery} setQuery={setDebugQuery} loading={debugging} onRun={runDebug} />}
-        {view === "evaluations" && <EvaluationsView running={evalRunning} onRun={runEvaluation} />}
+        {view === "library" && <LibraryView documents={documents} connection={libraryConnection} collections={collections} onImport={() => fileRef.current?.click()} onDiscover={() => setView("discover")} onCreateCollection={createCollectionFromLibrary} />}
+        {view === "debugger" && <DebuggerView query={debugQuery} setQuery={setDebugQuery} loading={debugging} result={debugResult} onRun={runDebug} />}
+        {view === "evaluations" && <EvaluationsView running={evalRunning} experiments={experiments} onRun={runEvaluation} />}
       </section>
     </main>
   );
@@ -494,8 +663,15 @@ function DiscoveryView(props: {
   discovering: boolean;
   importing: boolean;
   notice: string;
+  savedSearches: SavedSearch[];
+  comparison: ComparisonRow[];
+  citationGraph: CitationGraph | null;
   onDiscover: (event: React.FormEvent) => void;
   onImport: () => void;
+  onSave: () => void;
+  onRunSaved: (saved: SavedSearch) => void;
+  onCompare: () => void;
+  onCitationGraph: (paperId: string) => void;
 }) {
   return (
     <div className="page-canvas discovery-page">
@@ -503,7 +679,7 @@ function DiscoveryView(props: {
         <div>
           <span className="signal"><i /> LIVE SCHOLARLY SOURCES</span>
           <h1>Discover papers</h1>
-          <p>Search recent AI research across arXiv and OpenAlex. Evidensia extracts full arXiv PDFs when available and uses a clearly marked abstract fallback for other sources.</p>
+          <p>Search current AI research across arXiv, OpenAlex, Semantic Scholar, and Crossref. Evidensia resolves lawful open-access PDFs and keeps every fallback clearly marked.</p>
         </div>
       </div>
 
@@ -517,8 +693,8 @@ function DiscoveryView(props: {
           <label><span>To</span><input type="date" value={props.dateTo} onChange={(event) => props.setDateTo(event.target.value)} /></label>
           <fieldset>
             <legend>Sources</legend>
-            {(["arxiv", "openalex"] as PaperProvider[]).map((provider) => (
-              <label key={provider}><input type="checkbox" checked={props.providers.includes(provider)} onChange={() => props.toggleProvider(provider)} /> {provider === "arxiv" ? "arXiv" : "OpenAlex"}</label>
+            {(["arxiv", "openalex", "semantic_scholar", "crossref"] as PaperProvider[]).map((provider) => (
+              <label key={provider}><input type="checkbox" checked={props.providers.includes(provider)} onChange={() => props.toggleProvider(provider)} /> {providerLabel(provider)}</label>
             ))}
           </fieldset>
           <button className="primary-button" disabled={props.discovering || props.providers.length === 0}>
@@ -527,14 +703,24 @@ function DiscoveryView(props: {
         </div>
       </form>
 
+      {props.savedSearches.length > 0 && <div className="saved-search-strip"><span className="micro-label">SAVED SEARCHES</span>{props.savedSearches.slice(0, 4).map((saved) => <button key={saved.search_id} type="button" onClick={() => props.onRunSaved(saved)}>{saved.name}<small>{saved.last_run_at ? "Updated" : "Ready"}</small></button>)}</div>}
+
       {props.notice && <p className="discovery-notice" role="status">{props.notice}</p>}
 
       <div className="discovery-toolbar">
         <div><span className="micro-label">DISCOVERY RESULTS</span><strong>{props.papers.length || "—"}</strong></div>
-        <button className="ghost-button" type="button" disabled={props.selectedPaperIds.size === 0 || props.importing} onClick={props.onImport}>
-          {props.importing ? "Extracting…" : `Ingest selected (${props.selectedPaperIds.size})`}
-        </button>
+        <div className="toolbar-actions">
+          <button className="ghost-button" type="button" onClick={props.onSave}>Save search</button>
+          <button className="ghost-button" type="button" disabled={props.selectedPaperIds.size < 2} onClick={props.onCompare}>Compare selected</button>
+          <button className="ghost-button" type="button" disabled={props.selectedPaperIds.size === 0 || props.importing} onClick={props.onImport}>
+            {props.importing ? "Extracting…" : `Ingest selected (${props.selectedPaperIds.size})`}
+          </button>
+        </div>
       </div>
+
+      {props.comparison.length > 0 && <section className="comparison-panel"><div className="panel-title"><span>PAPER COMPARISON</span><small>{props.comparison.length} SOURCES</small></div><div className="comparison-grid"><span>Paper</span><span>Year</span><span>Citations</span><span>Access</span><span>Topics</span>{props.comparison.map((paper) => <div className="comparison-row" key={paper.paper_id}><strong>{paper.title}</strong><span>{paper.publication_year}</span><span>{paper.citation_count ?? "—"}</span><span>{paper.open_access ? "Open" : "Unknown"}</span><span>{paper.topics.slice(0, 3).join(" · ") || "—"}</span></div>)}</div></section>}
+
+      {props.citationGraph && props.citationGraph.nodes.length > 0 && <section className="citation-panel"><div className="panel-title"><span>CITATION NEIGHBORHOOD</span><small>{props.citationGraph.edges.length} LINKS</small></div><div className="citation-nodes">{props.citationGraph.nodes.slice(0, 12).map((node) => <article key={node.paper_id}><strong>{node.title}</strong><span>{node.year || "—"} · {node.citation_count ?? 0} citations</span></article>)}</div></section>}
 
       {props.papers.length === 0 ? (
         <div className="paper-empty"><span>✦</span><strong>Search the 2025–2026 literature</strong><p>Results are deduplicated by DOI and paper identity before they reach your library.</p></div>
@@ -545,10 +731,10 @@ function DiscoveryView(props: {
               <label className="paper-select" aria-label={`Select ${paper.title}`}><input type="checkbox" checked={props.selectedPaperIds.has(paper.paper_id)} onChange={() => props.togglePaper(paper.paper_id)} /></label>
               <div className="paper-copy">
                 <div className="paper-meta">
-                  <span>{paper.providers.map((provider) => provider === "arxiv" ? "arXiv" : "OpenAlex").join(" + ")}</span>
+                  <span>{paper.providers.map(providerLabel).join(" + ")}</span>
                   <span>{paper.published_at}</span>
                   <span>{paper.open_access ? "Open access" : "Access unknown"}</span>
-                  <span>{paper.providers.includes("arxiv") ? "Full text ready" : "Abstract metadata"}</span>
+                  <span>{paper.open_access ? "OA resolver ready" : "Abstract metadata"}</span>
                   {paper.citation_count !== null && <span>{paper.citation_count} citations</span>}
                 </div>
                 <h2>{paper.title}</h2>
@@ -556,7 +742,7 @@ function DiscoveryView(props: {
                 <p className="paper-abstract">{paper.abstract}</p>
                 <footer>
                   <span>{paper.venue || paper.categories.slice(0, 3).join(" · ") || paper.publication_type}</span>
-                  <a href={paper.landing_url} target="_blank" rel="noreferrer">View source ↗</a>
+                  <span className="paper-links"><button type="button" onClick={() => props.onCitationGraph(paper.paper_id)}>Citation graph</button><a href={paper.landing_url} target="_blank" rel="noreferrer">View source ↗</a></span>
                 </footer>
               </div>
             </article>
@@ -572,7 +758,11 @@ function ResearchView(props: {
   setQuestion: (value: string) => void;
   depth: Depth;
   setDepth: (value: Depth) => void;
+  namespace: string;
+  setNamespace: (value: string) => void;
+  collections: ResearchCollection[];
   running: boolean;
+  error: string;
   run: ResearchRun | null;
   timeline: TimelineItem[];
   selectedEvidence: Evidence | null;
@@ -659,15 +849,17 @@ function ResearchView(props: {
   );
 }
 
-function ResearchComposer(props: { question: string; setQuestion: (value: string) => void; depth: Depth; setDepth: (value: Depth) => void; running: boolean; startResearch: (event: React.FormEvent) => void }) {
+function ResearchComposer(props: { question: string; setQuestion: (value: string) => void; depth: Depth; setDepth: (value: Depth) => void; namespace: string; setNamespace: (value: string) => void; collections: ResearchCollection[]; running: boolean; error: string; startResearch: (event: React.FormEvent) => void }) {
   return (
     <form className="research-box" onSubmit={props.startResearch}>
       <label htmlFor="research-question">What would you like to investigate?</label>
       <textarea id="research-question" value={props.question} onChange={(event) => props.setQuestion(event.target.value)} rows={4} />
       <div className="composer-foot">
         <fieldset><legend>Research depth</legend>{(["quick", "standard", "deep"] as Depth[]).map((item) => <label key={item}><input type="radio" name="depth" checked={props.depth === item} onChange={() => props.setDepth(item)} /> {item[0].toUpperCase() + item.slice(1)}</label>)}</fieldset>
+        <label className="scope-select"><span>Research scope</span><select value={props.namespace} onChange={(event) => props.setNamespace(event.target.value)}><option value="open-research">Open research corpus</option>{props.collections.map((collection) => <option key={collection.collection_id} value={collection.collection_id}>{collection.name} · {collection.document_ids.length} sources</option>)}</select></label>
         <button className="primary-button" type="submit" disabled={props.running}>{props.running ? "Researching…" : "Start research"}<span>→</span></button>
       </div>
+      {props.error && <p className="composer-error" role="alert">{props.error}</p>}
     </form>
   );
 }
@@ -686,16 +878,17 @@ function ReportView({ run }: { run: ResearchRun }) {
         <article className="claim-graph"><h3>Claim graph</h3>{report.claims.map((claim) => <div className="claim-row" key={claim.claim_id}><span className={`claim-state ${claim.status}`}>{claim.status}</span><div><strong>{claim.statement}</strong><small>{claim.evidence_ids.length} supporting · {claim.opposing_evidence_ids.length} opposing</small></div><b>{Math.round(claim.confidence * 100)}%</b></div>)}</article>
       </div>
       <div className="report-foot"><div><h3>Limitations</h3>{report.limitations.map((item) => <p key={item}>— {item}</p>)}</div><div><h3>Unresolved</h3>{report.unresolved_questions.map((item) => <p key={item}>— {item}</p>)}</div></div>
+      <div className="export-strip"><span className="micro-label">EXPORT VERIFIED REPORT</span>{(["markdown", "json", "bibtex", "ris"] as const).map((format) => <a key={format} href={`${API_BASE}/v1/research/${run.run_id}/export?format=${format}`} download>{format.toUpperCase()}</a>)}</div>
     </section>
   );
 }
 
-function LibraryView({ documents, connection, onImport, onDiscover }: { documents: DocumentItem[]; connection: LibraryConnection; onImport: () => void; onDiscover: () => void }) {
+function LibraryView({ documents, connection, collections, onImport, onDiscover, onCreateCollection }: { documents: DocumentItem[]; connection: LibraryConnection; collections: ResearchCollection[]; onImport: () => void; onDiscover: () => void; onCreateCollection: () => void }) {
   const indexed = documents.filter((document) => document.status !== "Demo");
   const demos = documents.filter((document) => document.status === "Demo");
   return (
     <div className="page-canvas">
-      <div className="page-heading"><div><span className="signal"><i /> KNOWLEDGE FOUNDATION</span><h1>Source library</h1><p>Every indexed source is parsed into section-aware parent context and retrieval chunks.</p></div><div className="page-actions"><button className="ghost-button" onClick={onImport}>＋ Upload file</button><button className="primary-button" onClick={onDiscover}>Discover papers<span>→</span></button></div></div>
+      <div className="page-heading"><div><span className="signal"><i /> KNOWLEDGE FOUNDATION</span><h1>Source library</h1><p>Every indexed source is parsed into section-aware parent context and retrieval chunks.</p></div><div className="page-actions"><button className="ghost-button" onClick={onImport}>＋ Upload file</button><button className="ghost-button" onClick={onCreateCollection} disabled={indexed.length === 0}>Save collection ({collections.length})</button><button className="primary-button" onClick={onDiscover}>Discover papers<span>→</span></button></div></div>
       {connection === "preview" && <p className="library-banner">The three rows below are demonstration sources. Start the Evidensia API and use Discover papers to build a live corpus.</p>}
       {connection === "live" && demos.length > 0 && indexed.length === 0 && <p className="library-banner">The API is connected, but only demo sources are loaded. Open Discover papers, search a topic, and ingest the selected results.</p>}
       <div className="library-stats"><div><span>Indexed sources</span><strong>{indexed.length}</strong></div><div><span>Retrieval chunks</span><strong>{indexed.reduce((sum, item) => sum + item.chunks, 0)}</strong></div><div><span>Library</span><strong className="green-text">{connection === "live" ? "Connected" : connection === "connecting" ? "Connecting" : "Preview"}</strong></div></div>
@@ -704,26 +897,33 @@ function LibraryView({ documents, connection, onImport, onDiscover }: { document
   );
 }
 
-function DebuggerView({ query, setQuery, loading, onRun }: { query: string; setQuery: (value: string) => void; loading: boolean; onRun: (event: React.FormEvent) => void }) {
+function DebuggerView({ query, setQuery, loading, result, onRun }: { query: string; setQuery: (value: string) => void; loading: boolean; result: DebugResult | null; onRun: (event: React.FormEvent) => void }) {
   const columns = [{ key: "dense", title: "Dense", note: "semantic recall" }, { key: "sparse", title: "BM25", note: "exact terms" }, { key: "fused", title: "RRF", note: "rank fusion" }, { key: "reranked", title: "Reranked", note: "final precision" }] as const;
+  const score = (key: typeof columns[number]["key"], item: DebugRank) => key === "fused" ? item.rrf_score : key === "reranked" ? item.final_score : item.final_score;
   return (
     <div className="page-canvas debugger-page">
       <div className="page-heading"><div><span className="signal"><i /> RETRIEVAL OBSERVABILITY</span><h1>Retrieval debugger</h1><p>Inspect every stage of the evidence search pipeline without hiding the ranking decisions.</p></div></div>
       <form className="debug-query" onSubmit={onRun}><label htmlFor="debug-query">Query</label><input id="debug-query" value={query} onChange={(event) => setQuery(event.target.value)} /><button className="primary-button">{loading ? "Running…" : "Run pipeline"}<span>→</span></button></form>
-      <div className={`debug-grid ${loading ? "loading" : ""}`}>{columns.map((column, colIndex) => <section key={column.key}><header><div><span>0{colIndex + 1}</span><h2>{column.title}</h2></div><small>{column.note}</small></header>{demoDebug[column.key].map((item, index) => <div className="rank-item" key={item.id}><b>{index + 1}</b><div><strong>{item.id}</strong><span style={{ width: `${Math.min(100, item.score < 1 ? item.score * 100 : item.score * 7)}%` }} /></div><em>{item.score < 1 ? item.score.toFixed(column.key === "fused" ? 4 : 2) : item.score.toFixed(1)}</em></div>)}<footer>{column.key === "reranked" ? "Top 8 → evidence engine" : "Top 30 candidates →"}</footer></section>)}</div>
-      <div className="intent-strip"><span>QUERY INTENT</span><strong>Benchmark comparison</strong><span>KEYWORD SPECIFICITY</span><strong>0.84</strong><span>MULTI-HOP</span><strong>Yes</strong><span>DURATION</span><strong>182 ms</strong></div>
+      <div className={`debug-grid ${loading ? "loading" : ""}`}>{columns.map((column, colIndex) => <section key={column.key}><header><div><span>0{colIndex + 1}</span><h2>{column.title}</h2></div><small>{column.note}</small></header>{(result?.[column.key] || []).map((item, index) => { const value = score(column.key, item); return <div className="rank-item" key={item.chunk.chunk_id}><b>{index + 1}</b><div><strong title={item.chunk.title}>{item.chunk.title}</strong><span style={{ width: `${Math.min(100, column.key === "sparse" ? value * 7 : value * 100)}%` }} /></div><em>{value < 1 ? value.toFixed(column.key === "fused" ? 4 : 2) : value.toFixed(1)}</em></div>; })}<footer>{result ? `${result[column.key].length} ranked candidates` : "Run the live pipeline →"}</footer></section>)}</div>
+      <div className="intent-strip"><span>QUERY INTENT</span><strong>{result?.intent.intent.replaceAll("_", " ") || "—"}</strong><span>KEYWORD SPECIFICITY</span><strong>{result?.intent.keyword_specificity.toFixed(2) || "—"}</strong><span>MULTI-HOP</span><strong>{result ? (result.intent.requires_multi_hop ? "Yes" : "No") : "—"}</strong><span>DURATION</span><strong>{result ? `${result.duration_ms.toFixed(1)} ms` : "—"}</strong></div>
     </div>
   );
 }
 
-function EvaluationsView({ running, onRun }: { running: boolean; onRun: () => void }) {
-  const metrics = [{ label: "Recall@10", value: 94.3, target: 85 }, { label: "NDCG@10", value: 91.7, target: 88 }, { label: "Citation accuracy", value: 96.1, target: 94 }, { label: "Faithfulness", value: 94.8, target: 92 }];
-  const experiments = [{ name: "Dense", recall: 79, ndcg: 71 }, { name: "BM25", recall: 71, ndcg: 68 }, { name: "Hybrid RRF", recall: 88, ndcg: 81 }, { name: "Reranked", recall: 94, ndcg: 92 }];
+function EvaluationsView({ running, experiments, onRun }: { running: boolean; experiments: Experiment[]; onRun: () => void }) {
+  const unique = experiments.filter((experiment, index) => experiments.findIndex((item) => item.name === experiment.name) === index).slice(0, 4);
+  const best = unique.find((item) => item.name === "reranked") || unique[0];
+  const metrics = [
+    { label: "Recall@10", value: (best?.metrics.recall_at_k || 0) * 100, target: 85 },
+    { label: "NDCG@10", value: (best?.metrics.ndcg_at_k || 0) * 100, target: 80 },
+    { label: "Document recall", value: (best?.metrics.document_recall_at_k || 0) * 100, target: 85 },
+    { label: "Claim coverage", value: (best?.metrics.claim_coverage || 0) * 100, target: 75 },
+  ];
   return (
     <div className="page-canvas">
       <div className="page-heading"><div><span className="signal"><i /> QUALITY, NOT VIBES</span><h1>Evaluation lab</h1><p>Measure retrieval, evidence grounding, and agent recovery before model or ranking changes ship.</p></div><button className="primary-button" onClick={onRun} disabled={running}>{running ? "Evaluating…" : "Run evaluation"}<span>→</span></button></div>
-      <div className="metric-grid">{metrics.map((metric) => <article key={metric.label}><span>{metric.label}</span><strong>{metric.value}%</strong><div><i style={{ width: `${metric.value}%` }} /><b style={{ left: `${metric.target}%` }} /></div><small>Target ≥ {metric.target}%</small></article>)}</div>
-      <div className="eval-layout"><section className="experiment-chart"><div className="panel-title"><span>RETRIEVAL ABLATION</span><small>GOLD SET · 300 QUESTIONS</small></div>{experiments.map((experiment) => <div className="experiment-row" key={experiment.name}><strong>{experiment.name}</strong><div className="bar-track"><span style={{ width: `${experiment.recall}%` }}>{experiment.recall}</span></div><div className="bar-track muted"><span style={{ width: `${experiment.ndcg}%` }}>{experiment.ndcg}</span></div></div>)}<footer><span><i className="recall-key" /> Recall@10</span><span><i className="ndcg-key" /> NDCG@10</span></footer></section><section className="agent-scorecard"><div className="panel-title"><span>AGENT BEHAVIOR</span><small>LAST 30 DAYS</small></div><div><span>Plan success</span><strong>95.4%</strong></div><div><span>Retrieval recovery</span><strong>72.1%</strong></div><div><span>Unsupported claims</span><strong>2.6%</strong></div><div><span>Average search loops</span><strong>2.3</strong></div><p><span className="status-dot" /> All quality gates passing</p></section></div>
+      <div className="metric-grid">{metrics.map((metric) => <article key={metric.label}><span>{metric.label}</span><strong>{metric.value.toFixed(1)}%</strong><div><i style={{ width: `${metric.value}%` }} /><b style={{ left: `${metric.target}%` }} /></div><small>Target ≥ {metric.target}%</small></article>)}</div>
+      <div className="eval-layout"><section className="experiment-chart"><div className="panel-title"><span>RETRIEVAL ABLATION</span><small>VERSIONED GOLD SET · {best?.cases || 0} QUESTIONS</small></div>{unique.map((experiment) => { const recall = experiment.metrics.recall_at_k * 100; const ndcg = experiment.metrics.ndcg_at_k * 100; return <div className="experiment-row" key={experiment.name}><strong>{experiment.name}</strong><div className="bar-track"><span style={{ width: `${recall}%` }}>{recall.toFixed(0)}</span></div><div className="bar-track muted"><span style={{ width: `${ndcg}%` }}>{ndcg.toFixed(0)}</span></div></div>; })}<footer><span><i className="recall-key" /> Recall@10</span><span><i className="ndcg-key" /> NDCG@10</span></footer></section><section className="agent-scorecard"><div className="panel-title"><span>EXPERIMENT DETAILS</span><small>LIVE</small></div><div><span>Gold cases</span><strong>{best?.cases || 0}</strong></div><div><span>Precision@10</span><strong>{((best?.metrics.precision_at_k || 0) * 100).toFixed(1)}%</strong></div><div><span>MRR</span><strong>{(best?.metrics.mrr || 0).toFixed(3)}</strong></div><div><span>Runtime</span><strong>{best ? `${best.duration_ms.toFixed(1)} ms` : "—"}</strong></div><p><span className="status-dot" /> {best ? "Latest experiment recorded" : "Run the gold set to establish a baseline"}</p></section></div>
     </div>
   );
 }

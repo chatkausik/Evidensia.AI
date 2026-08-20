@@ -17,8 +17,10 @@ def user_agent() -> str:
     return f"Evidensia/0.1 (research paper discovery{suffix})"
 
 
-def get_bytes(url: str, *, timeout: float = 20) -> bytes:
-    request = Request(url, headers={"Accept": "application/json, application/atom+xml", "User-Agent": user_agent()})
+def get_bytes(url: str, *, timeout: float = 20, headers: dict[str, str] | None = None) -> bytes:
+    request_headers = {"Accept": "application/json, application/atom+xml", "User-Agent": user_agent()}
+    request_headers.update(headers or {})
+    request = Request(url, headers=request_headers)
     try:
         with urlopen(request, timeout=timeout) as response:
             return response.read()
@@ -28,9 +30,9 @@ def get_bytes(url: str, *, timeout: float = 20) -> bytes:
         raise PaperSourceError(f"upstream could not be reached: {exc.reason if isinstance(exc, URLError) else exc}") from exc
 
 
-def get_json(url: str, *, timeout: float = 20) -> dict[str, Any]:
+def get_json(url: str, *, timeout: float = 20, headers: dict[str, str] | None = None) -> dict[str, Any]:
     try:
-        return json.loads(get_bytes(url, timeout=timeout))
+        return json.loads(get_bytes(url, timeout=timeout, headers=headers))
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise PaperSourceError("upstream returned an invalid JSON response") from exc
 

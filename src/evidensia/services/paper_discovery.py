@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import re
+import math
 from collections.abc import Callable
 from datetime import datetime, timezone
 from urllib.parse import urlsplit, urlunsplit
 
-from evidensia.connectors import ArxivConnector, OpenAlexConnector
+from evidensia.connectors import ArxivConnector, CrossrefConnector, OpenAlexConnector, SemanticScholarConnector, UnpaywallClient
 from evidensia.connectors.http import PaperSourceError, get_document
 from evidensia.models import (
     DiscoveredPaper,
+    CitationGraph,
     DocumentRecord,
+    PaperComparison,
     PaperDiscoveryRequest,
     PaperDiscoveryResponse,
     PaperImportResponse,
@@ -57,13 +60,19 @@ class PaperDiscoveryService:
         knowledge: KnowledgeService,
         arxiv: ArxivConnector | None = None,
         openalex: OpenAlexConnector | None = None,
+        semantic_scholar: SemanticScholarConnector | None = None,
+        crossref: CrossrefConnector | None = None,
+        unpaywall: UnpaywallClient | None = None,
         fetch_document: Callable[[str], tuple[bytes, str]] | None = None,
     ) -> None:
         self.knowledge = knowledge
         self.connectors = {
             "arxiv": arxiv or ArxivConnector(),
             "openalex": openalex or OpenAlexConnector(),
+            "semantic_scholar": semantic_scholar or SemanticScholarConnector(),
+            "crossref": crossref or CrossrefConnector(),
         }
+        self.unpaywall = unpaywall or UnpaywallClient()
         self.discovered: dict[str, DiscoveredPaper] = {}
         self.imported: dict[str, str] = {}
         self._fetch_document = fetch_document or get_document
@@ -77,7 +86,14 @@ class PaperDiscoveryService:
             except PaperSourceError as exc:
                 warnings.append(f"{provider}: {exc}")
 
-        papers = self._deduplicate(collected)[: request.limit]
+        if request.open_access_only:
+            collected = [paper for paper in collected if paper.open_access or "arxiv" in paper.providers]
+
+        papers = sorted(
+            self._deduplicate(collected),
+            key=lambda paper: self._relevance(request.query, paper),
+            reverse=True,
+        )[: request.limit]
         self.discovered.update({paper.paper_id: paper for paper in papers})
         return PaperDiscoveryResponse(
             query=request.query,
@@ -104,7 +120,13 @@ class PaperDiscoveryService:
             filename = self._filename(paper, ".md")
             content = self._as_markdown(paper).encode("utf-8")
             content_type = "text/markdown"
-            if full_text and (pdf_url := self._trusted_arxiv_pdf_url(paper)):
+            pdf_url = self._trusted_arxiv_pdf_url(paper) or self._trusted_pdf_url(paper.pdf_url)
+            if full_text and not pdf_url and paper.doi:
+                try:
+                    pdf_url = self._trusted_pdf_url(self.unpaywall.find_pdf(paper.doi))
+                except PaperSourceError:
+                    pdf_url = None
+            if full_text and pdf_url:
                 try:
                     content, content_type = self._fetch_document(pdf_url)
                     filename = self._filename(paper, ".pdf")
@@ -142,6 +164,41 @@ class PaperDiscoveryService:
             abstract_fallbacks=abstract_fallbacks,
         )
 
+    def compare(self, paper_ids: list[str]) -> list[PaperComparison]:
+        rows: list[PaperComparison] = []
+        for paper_id in dict.fromkeys(paper_ids):
+            paper = self.discovered.get(paper_id)
+            if not paper:
+                continue
+            document_id = self.imported.get(paper_id) or self._existing_document_id(paper)
+            metadata = self.knowledge.documents.get(document_id).metadata if document_id and self.knowledge.documents.get(document_id) else None
+            rows.append(PaperComparison(
+                paper_id=paper.paper_id,
+                title=paper.title,
+                providers=paper.providers,
+                publication_year=paper.published_at.year,
+                venue=paper.venue,
+                citation_count=paper.citation_count,
+                open_access=paper.open_access,
+                topics=paper.topics or paper.categories,
+                methods=metadata.methods if metadata else [],
+                datasets=metadata.datasets if metadata else [],
+                abstract=paper.abstract,
+            ))
+        return rows
+
+    def citation_graph(self, paper_id: str, limit: int = 15) -> CitationGraph:
+        paper = self.discovered.get(paper_id)
+        semantic_id = paper.external_ids.get("semantic_scholar") if paper else None
+        if not semantic_id and paper_id.startswith("semantic_scholar:"):
+            semantic_id = paper_id.split(":", 1)[1]
+        if not semantic_id:
+            return CitationGraph(root_id=paper_id)
+        connector = self.connectors.get("semantic_scholar")
+        if not isinstance(connector, SemanticScholarConnector):
+            return CitationGraph(root_id=paper_id)
+        return connector.citation_graph(semantic_id, limit)
+
     def _existing_document_id(self, paper: DiscoveredPaper) -> str | None:
         paper_doi = _normalized_doi(paper.doi)
         for document in self.knowledge.documents.values():
@@ -170,6 +227,17 @@ class PaperDiscoveryService:
         return sorted(output, key=lambda paper: paper.published_at, reverse=True)
 
     @staticmethod
+    def _relevance(query: str, paper: DiscoveredPaper) -> float:
+        terms = set(re.findall(r"[a-z0-9]+", query.lower()))
+        title_terms = set(re.findall(r"[a-z0-9]+", paper.title.lower()))
+        abstract_terms = set(re.findall(r"[a-z0-9]+", paper.abstract.lower()))
+        title_score = len(terms & title_terms) / max(1, len(terms))
+        abstract_score = len(terms & abstract_terms) / max(1, len(terms))
+        citation_score = min(1.0, math.log1p(paper.citation_count or 0) / 8)
+        freshness = max(0.0, min(1.0, (paper.published_at.year - 2020) / 6))
+        return 0.52 * title_score + 0.25 * abstract_score + 0.13 * freshness + 0.1 * citation_score
+
+    @staticmethod
     def _filename(paper: DiscoveredPaper, suffix: str) -> str:
         stem = re.sub(r"[^a-zA-Z0-9]+", "-", paper.title).strip("-").lower()[:90]
         return f"{paper.published_at.year}-{stem}{suffix}"
@@ -180,6 +248,16 @@ class PaperDiscoveryService:
             return None
         parsed = urlsplit(paper.pdf_url)
         if parsed.hostname not in {"arxiv.org", "www.arxiv.org", "export.arxiv.org"}:
+            return None
+        return urlunsplit(("https", parsed.netloc, parsed.path, parsed.query, ""))
+
+    @staticmethod
+    def _trusted_pdf_url(value: str | None) -> str | None:
+        if not value:
+            return None
+        parsed = urlsplit(value)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme != "https" or not host or host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".local"):
             return None
         return urlunsplit(("https", parsed.netloc, parsed.path, parsed.query, ""))
 

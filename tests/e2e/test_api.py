@@ -78,3 +78,65 @@ def test_paper_discovery_and_import_flow() -> None:
 
     documents = client.get("/v1/documents")
     assert len(documents.json()) == 1
+
+
+def test_persistent_workflows_scoped_research_and_exports(tmp_path) -> None:
+    application = create_app(seed_demo=True, data_dir=str(tmp_path))
+    client = TestClient(application)
+    documents = client.get("/v1/documents").json()
+    agentic = next(item for item in documents if item["document_id"] == "demo-agentic")
+
+    saved = client.post("/v1/saved-searches", json={
+        "name": "Recent agentic RAG",
+        "query": "agentic RAG",
+        "date_from": "2025-01-01",
+        "date_to": "2026-12-31",
+        "providers": ["arxiv", "openalex"],
+    })
+    assert saved.status_code == 201, saved.text
+
+    collection = client.post("/v1/collections", json={
+        "name": "Agentic evidence",
+        "description": "Focused evaluation corpus",
+        "document_ids": [agentic["document_id"]],
+    })
+    assert collection.status_code == 201, collection.text
+    collection_id = collection.json()["collection_id"]
+
+    research = client.post("/v1/research", json={
+        "question": "What benefits and costs were measured for agentic retrieval?",
+        "namespace": collection_id,
+        "date_from": "2025-01-01",
+        "date_to": "2025-12-31",
+        "allowed_sources": ["demo://"],
+        "depth": "quick",
+        "run_synchronously": True,
+    })
+    assert research.status_code == 202, research.text
+    payload = research.json()
+    assert payload["metadata_filters"]["document_ids"] == ["demo-agentic"]
+    assert {item["citation"]["document_id"] for item in payload["retrieved_evidence"]} == {"demo-agentic"}
+
+    exported = client.get(f"/v1/research/{payload['run_id']}/export?format=markdown")
+    assert exported.status_code == 200
+    assert "## Sources" in exported.text
+
+    evaluation = client.post("/v1/evals/run", json={"run_ablation": True, "dataset_name": "sample-v2"})
+    assert evaluation.status_code == 200, evaluation.text
+    assert len(evaluation.json()) == 4
+    assert evaluation.json()[-1]["cases"] == 6
+    assert {result["metadata"]["dataset_name"] for result in evaluation.json()} == {"sample-v2"}
+
+    invalid_saved = client.post("/v1/saved-searches", json={
+        "name": "Invalid range",
+        "query": "agentic RAG",
+        "date_from": "2026-12-31",
+        "date_to": "2025-01-01",
+        "providers": ["arxiv"],
+    })
+    assert invalid_saved.status_code == 422
+
+    restarted = TestClient(create_app(seed_demo=False, data_dir=str(tmp_path)))
+    assert restarted.get("/v1/saved-searches").json()[0]["search_id"] == saved.json()["search_id"]
+    assert restarted.get(f"/v1/research/{payload['run_id']}").status_code == 200
+    assert len(restarted.get("/v1/evals/experiments").json()) == 4

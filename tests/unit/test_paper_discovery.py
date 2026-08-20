@@ -6,6 +6,8 @@ from pypdf import PdfWriter
 from evidensia.connectors.arxiv import ArxivConnector
 from evidensia.connectors.http import PaperSourceError
 from evidensia.connectors.openalex import OpenAlexConnector
+from evidensia.connectors.crossref import CrossrefConnector
+from evidensia.connectors.semantic_scholar import SemanticScholarConnector
 from evidensia.models import DiscoveredPaper, PaperDiscoveryRequest
 from evidensia.services.knowledge import KnowledgeService
 from evidensia.services.paper_discovery import PaperDiscoveryService
@@ -154,3 +156,79 @@ def test_arxiv_download_failure_imports_abstract_fallback() -> None:
     assert len(result.imported) == 1
     assert result.imported[0].filename.endswith(".md")
     assert result.abstract_fallbacks == [discovery.papers[0].paper_id]
+
+
+def test_semantic_scholar_discovery_and_citation_graph() -> None:
+    def fetch(url: str):
+        if "/references?" in url:
+            return {"data": [{"citedPaper": {"paperId": "P2", "title": "Referenced work", "year": 2024, "citationCount": 8, "url": "https://example.org/p2"}}]}
+        if "/citations?" in url:
+            return {"data": [{"citingPaper": {"paperId": "P3", "title": "Citing work", "year": 2026, "citationCount": 2, "url": "https://example.org/p3"}}]}
+        if "/paper/P1?" in url:
+            return {"paperId": "P1", "title": "Agentic Retrieval Graph", "year": 2025, "citationCount": 5, "url": "https://example.org/p1"}
+        return {"data": [{
+            "paperId": "P1",
+            "title": "Agentic Retrieval Graph",
+            "abstract": "A citation-aware agentic retrieval system.",
+            "authors": [{"name": "Ada Researcher"}],
+            "year": 2025,
+            "publicationDate": "2025-06-01",
+            "venue": "EvidenceConf",
+            "externalIds": {"DOI": "10.1000/p1"},
+            "openAccessPdf": {"url": "https://example.org/p1.pdf"},
+            "fieldsOfStudy": ["Computer Science"],
+            "citationCount": 5,
+            "publicationTypes": ["JournalArticle"],
+            "url": "https://example.org/p1",
+        }]}
+
+    connector = SemanticScholarConnector(api_key="test", fetch=fetch)
+    request = _request().model_copy(update={"providers": ["semantic_scholar"]})
+    paper = connector.discover(request)[0]
+    graph = connector.citation_graph("P1")
+
+    assert paper.external_ids["semantic_scholar"] == "P1"
+    assert paper.doi == "10.1000/p1"
+    assert len(graph.nodes) == 3
+    assert {edge.relation for edge in graph.edges} == {"references", "cited_by"}
+
+
+def test_crossref_normalizes_doi_metadata() -> None:
+    payload = {"message": {"items": [{
+        "DOI": "10.1000/crossref",
+        "title": ["Crossref Evidence Paper"],
+        "abstract": "<jats:p>Evidence abstract.</jats:p>",
+        "author": [{"given": "Ada", "family": "Researcher"}],
+        "published": {"date-parts": [[2025, 7, 2]]},
+        "container-title": ["Evidence Journal"],
+        "URL": "https://doi.org/10.1000/crossref",
+        "license": [{"URL": "https://creativecommons.org/licenses/by/4.0/"}],
+        "is-referenced-by-count": 11,
+        "type": "journal-article",
+    }]}}
+    connector = CrossrefConnector(contact_email="test@example.com", fetch=lambda _: payload)
+    paper = connector.discover(_request().model_copy(update={"providers": ["crossref"]}))[0]
+
+    assert paper.doi == "10.1000/crossref"
+    assert paper.abstract == "Evidence abstract."
+    assert paper.open_access is True
+
+
+def test_discovery_enforces_open_access_across_connectors() -> None:
+    payload = {"message": {"items": [{
+        "DOI": "10.1000/closed",
+        "title": ["Closed Evidence Paper"],
+        "abstract": "Evidence abstract.",
+        "author": [{"given": "Ada", "family": "Researcher"}],
+        "published": {"date-parts": [[2025, 7, 2]]},
+        "URL": "https://doi.org/10.1000/closed",
+        "is-referenced-by-count": 1,
+        "type": "journal-article",
+    }]}}
+    service = PaperDiscoveryService(
+        KnowledgeService(),
+        crossref=CrossrefConnector(contact_email="test@example.com", fetch=lambda _: payload),
+    )
+    request = _request().model_copy(update={"providers": ["crossref"], "open_access_only": True})
+
+    assert service.discover(request).papers == []

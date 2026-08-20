@@ -3,6 +3,7 @@ from __future__ import annotations
 from time import perf_counter
 
 from evidensia.models import RankedEvidence, SearchDebug
+from evidensia.providers import RerankerProvider
 from evidensia.retrieval.fusion import reciprocal_rank_fusion
 from evidensia.retrieval.index import LocalKnowledgeIndex
 from evidensia.retrieval.query import classify_query
@@ -10,7 +11,7 @@ from evidensia.retrieval.reranker import LocalReranker
 
 
 class HybridSearcher:
-    def __init__(self, index: LocalKnowledgeIndex, reranker: LocalReranker | None = None) -> None:
+    def __init__(self, index: LocalKnowledgeIndex, reranker: RerankerProvider | None = None) -> None:
         self.index = index
         self.reranker = reranker or LocalReranker()
 

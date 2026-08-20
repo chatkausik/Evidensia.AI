@@ -50,7 +50,7 @@ class DocumentRecord(StrictModel):
     error: str | None = None
 
 
-PaperProvider = Literal["arxiv", "openalex"]
+PaperProvider = Literal["arxiv", "openalex", "semantic_scholar", "crossref"]
 
 
 class PaperDiscoveryRequest(StrictModel):
@@ -112,6 +112,61 @@ class PaperImportResponse(StrictModel):
     skipped: list[str] = Field(default_factory=list)
     missing: list[str] = Field(default_factory=list)
     abstract_fallbacks: list[str] = Field(default_factory=list)
+
+
+class SavedSearch(StrictModel):
+    search_id: str
+    name: str = Field(min_length=2, max_length=120)
+    query: str = Field(min_length=2, max_length=500)
+    date_from: date = Field(default=date(2025, 1, 1))
+    date_to: date = Field(default_factory=lambda: datetime.now(timezone.utc).date())
+    providers: list[PaperProvider] = Field(default_factory=lambda: ["arxiv", "openalex"])
+    categories: list[str] = Field(default_factory=list)
+    open_access_only: bool = True
+    last_run_at: datetime | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class ResearchCollection(StrictModel):
+    collection_id: str
+    name: str = Field(min_length=2, max_length=120)
+    description: str = Field(default="", max_length=1000)
+    document_ids: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class PaperComparison(StrictModel):
+    paper_id: str
+    title: str
+    providers: list[PaperProvider]
+    publication_year: int
+    venue: str | None = None
+    citation_count: int | None = None
+    open_access: bool = False
+    topics: list[str] = Field(default_factory=list)
+    methods: list[str] = Field(default_factory=list)
+    datasets: list[str] = Field(default_factory=list)
+    abstract: str = ""
+
+
+class CitationGraphNode(StrictModel):
+    paper_id: str
+    title: str
+    year: int | None = None
+    citation_count: int | None = None
+    url: str | None = None
+
+
+class CitationGraphEdge(StrictModel):
+    source: str
+    target: str
+    relation: Literal["references", "cited_by"]
+
+
+class CitationGraph(StrictModel):
+    root_id: str
+    nodes: list[CitationGraphNode] = Field(default_factory=list)
+    edges: list[CitationGraphEdge] = Field(default_factory=list)
 
 
 class ChunkRecord(StrictModel):
@@ -265,6 +320,9 @@ class ResearchState(StrictModel):
     run_id: str
     question: str
     depth: Literal["quick", "standard", "deep"] = "standard"
+    namespace: str = "open-research"
+    metadata_filters: dict[str, str | int | list[str]] = Field(default_factory=dict)
+    provider_manifest: dict[str, str] = Field(default_factory=dict)
     research_plan: ResearchPlan | None = None
     sub_questions: list[SubQuestion] = Field(default_factory=list)
     search_queries: list[str] = Field(default_factory=list)
@@ -320,6 +378,9 @@ class MetricSet(StrictModel):
     mrr: float = Field(ge=0, le=1)
     ndcg_at_k: float = Field(ge=0, le=1)
     hit_rate: float = Field(ge=0, le=1)
+    document_recall_at_k: float = Field(default=0, ge=0, le=1)
+    answer_coverage: float = Field(default=0, ge=0, le=1)
+    claim_coverage: float = Field(default=0, ge=0, le=1)
 
 
 class ExperimentResult(StrictModel):
