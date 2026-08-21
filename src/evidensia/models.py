@@ -316,6 +316,12 @@ class AgentEvent(StrictModel):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class MemorySnippet(StrictModel):
+    memory_id: str
+    text: str = Field(min_length=1, max_length=2000)
+    score: float | None = Field(default=None, ge=0, le=1)
+
+
 class ResearchState(StrictModel):
     run_id: str
     question: str
@@ -323,6 +329,9 @@ class ResearchState(StrictModel):
     namespace: str = "open-research"
     metadata_filters: dict[str, str | int | list[str]] = Field(default_factory=dict)
     provider_manifest: dict[str, str] = Field(default_factory=dict)
+    memory_user_id: str | None = None
+    recalled_memories: list[MemorySnippet] = Field(default_factory=list)
+    memory_write_accepted: bool = False
     research_plan: ResearchPlan | None = None
     sub_questions: list[SubQuestion] = Field(default_factory=list)
     search_queries: list[str] = Field(default_factory=list)
@@ -354,6 +363,13 @@ class ResearchRequest(StrictModel):
     date_from: date | None = None
     date_to: date | None = None
     allowed_sources: list[str] | None = None
+    user_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@-]*$",
+    )
+    use_memory: bool = True
     run_synchronously: bool = False
 
     @model_validator(mode="after")

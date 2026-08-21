@@ -32,6 +32,8 @@ type ResearchRun = {
   confidence: number;
   iterations: number;
   provider_manifest: Record<string, string>;
+  recalled_memories: Array<{ memory_id: string; text: string; score: number | null }>;
+  memory_write_accepted: boolean;
   sub_questions: Array<{ id: string; question: string; purpose: string; completed: boolean }>;
   retrieved_evidence: Evidence[];
   final_report: null | {
@@ -233,10 +235,19 @@ export default function Home() {
   const [citationGraph, setCitationGraph] = useState<CitationGraph | null>(null);
   const [researchError, setResearchError] = useState("");
   const [providerManifest, setProviderManifest] = useState<Record<string, string>>({});
+  const [useMemory, setUseMemory] = useState(true);
   const fileRef = useRef<HTMLInputElement>(null);
+  const memoryUserIdRef = useRef("");
 
   useEffect(() => {
     let active = true;
+    const storageKey = "evidensia-memory-user-id";
+    let storedMemoryUserId = window.localStorage.getItem(storageKey);
+    if (!storedMemoryUserId) {
+      storedMemoryUserId = `researcher-${window.crypto.randomUUID()}`;
+      window.localStorage.setItem(storageKey, storedMemoryUserId);
+    }
+    memoryUserIdRef.current = storedMemoryUserId;
     fetch(`${API_BASE}/v1/documents`)
       .then((response) => {
         if (!response.ok) throw new Error("Library request failed");
@@ -275,7 +286,16 @@ export default function Home() {
       const response = await fetch(`${API_BASE}/v1/research`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, depth, namespace, date_from: dateFrom, date_to: dateTo, run_synchronously: false }),
+        body: JSON.stringify({
+          question,
+          depth,
+          namespace,
+          date_from: dateFrom,
+          date_to: dateTo,
+          user_id: memoryUserIdRef.current || undefined,
+          use_memory: useMemory,
+          run_synchronously: false,
+        }),
       });
       if (!response.ok) throw new Error("Research request failed");
       const initial: ResearchRun = await response.json();
@@ -606,6 +626,9 @@ export default function Home() {
             namespace={namespace}
             setNamespace={setNamespace}
             collections={collections}
+            memoryEnabled={providerManifest.memory === "mem0:platform"}
+            useMemory={useMemory}
+            setUseMemory={setUseMemory}
             running={running}
             error={researchError}
             run={run}
@@ -764,6 +787,9 @@ function ResearchView(props: {
   namespace: string;
   setNamespace: (value: string) => void;
   collections: ResearchCollection[];
+  memoryEnabled: boolean;
+  useMemory: boolean;
+  setUseMemory: (value: boolean) => void;
   running: boolean;
   error: string;
   run: ResearchRun | null;
@@ -798,7 +824,10 @@ function ResearchView(props: {
           <span className={`run-status ${props.running ? "working" : "complete"}`}>{props.running ? "● RESEARCH IN PROGRESS" : "✓ RESEARCH COMPLETE"}</span>
           <h1>{props.run?.question || props.question}</h1>
           <p>{props.running ? "Planning, searching, challenging, and verifying the evidence." : `${props.run?.retrieved_evidence.length || 0} evidence spans · ${props.run?.iterations || 0} research cycles · all citations checked`}</p>
-          {props.run?.provider_manifest?.research && <span className="model-chip">{props.run.provider_manifest.research.startsWith("openai:") ? `CONFIGURED · OPENAI ${props.run.provider_manifest.research.replace("openai:", "")}` : "DETERMINISTIC FALLBACK"}</span>}
+          <div className="run-chips">
+            {props.run?.provider_manifest?.research && <span className="model-chip">{props.run.provider_manifest.research.startsWith("openai:") ? `CONFIGURED · OPENAI ${props.run.provider_manifest.research.replace("openai:", "")}` : "DETERMINISTIC FALLBACK"}</span>}
+            {props.run?.provider_manifest?.memory === "mem0:platform" && <span className="model-chip">MEM0 · {props.run.recalled_memories.length} RECALLED{props.run.memory_write_accepted ? " · SAVED" : ""}</span>}
+          </div>
         </div>
         {!props.running && <button className="ghost-button" onClick={props.reset}>New question</button>}
       </div>
@@ -853,7 +882,7 @@ function ResearchView(props: {
   );
 }
 
-function ResearchComposer(props: { question: string; setQuestion: (value: string) => void; depth: Depth; setDepth: (value: Depth) => void; namespace: string; setNamespace: (value: string) => void; collections: ResearchCollection[]; running: boolean; error: string; startResearch: (event: React.FormEvent) => void }) {
+function ResearchComposer(props: { question: string; setQuestion: (value: string) => void; depth: Depth; setDepth: (value: Depth) => void; namespace: string; setNamespace: (value: string) => void; collections: ResearchCollection[]; memoryEnabled: boolean; useMemory: boolean; setUseMemory: (value: boolean) => void; running: boolean; error: string; startResearch: (event: React.FormEvent) => void }) {
   return (
     <form className="research-box" onSubmit={props.startResearch}>
       <label htmlFor="research-question">What would you like to investigate?</label>
@@ -861,6 +890,7 @@ function ResearchComposer(props: { question: string; setQuestion: (value: string
       <div className="composer-foot">
         <fieldset><legend>Research depth</legend>{(["quick", "standard", "deep"] as Depth[]).map((item) => <label key={item}><input type="radio" name="depth" checked={props.depth === item} onChange={() => props.setDepth(item)} /> {item[0].toUpperCase() + item.slice(1)}</label>)}</fieldset>
         <label className="scope-select"><span>Research scope</span><select value={props.namespace} onChange={(event) => props.setNamespace(event.target.value)}><option value="open-research">Open research corpus</option>{props.collections.map((collection) => <option key={collection.collection_id} value={collection.collection_id}>{collection.name} · {collection.document_ids.length} sources</option>)}</select></label>
+        {props.memoryEnabled && <div className="memory-toggle"><input id="use-memory" type="checkbox" checked={props.useMemory} onChange={(event) => props.setUseMemory(event.target.checked)} /><label htmlFor="use-memory"><strong>Long-term memory</strong><small>Recall and save with Mem0</small></label></div>}
         <button className="primary-button" type="submit" disabled={props.running}>{props.running ? "Researching…" : "Start research"}<span>→</span></button>
       </div>
       {props.error && <p className="composer-error" role="alert">{props.error}</p>}

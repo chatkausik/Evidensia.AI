@@ -49,12 +49,15 @@ from evidensia.services.knowledge import KnowledgeService
 from evidensia.services.paper_discovery import PaperDiscoveryService
 from evidensia.services.research import ResearchRunService
 from evidensia.services.exports import export_research
+from evidensia.services.memory import memory_from_environment
 from evidensia.connectors.http import PaperSourceError
 
 
 class ApplicationContainer:
     def __init__(self, seed_demo: bool = True, data_dir: str | None = None) -> None:
         self.providers = providers_from_environment()
+        self.memory = memory_from_environment()
+        self.provider_manifest = {**self.providers.manifest, "memory": self.memory.name}
         index = LocalKnowledgeIndex(self.providers.embedding)
         self.knowledge = KnowledgeService(index=index, storage_dir=data_dir)
         state_path = Path(data_dir) / "evidensia-state.sqlite3" if data_dir else None
@@ -67,7 +70,8 @@ class ApplicationContainer:
             planner=ResearchPlanner(self.providers.research),
             synthesis=SynthesisEngine(self.providers.entailment, self.providers.research),
             store=self.state_store,
-            provider_manifest=self.providers.manifest,
+            provider_manifest=self.provider_manifest,
+            memory=self.memory,
         )
         self.evaluator = EvaluationRunner(self.knowledge.index, self.searcher)
         self.experiments: list[ExperimentResult] = [
@@ -169,13 +173,13 @@ def create_app(*, seed_demo: bool = True, data_dir: str | None = None) -> FastAP
                 "documents": len(current.knowledge.documents),
                 "chunks": len(current.knowledge.index.all()),
                 "persistent_library": current.knowledge.storage_dir is not None,
-                "providers": current.providers.manifest,
+                "providers": current.provider_manifest,
             },
         )
 
     @application.get("/v1/providers")
     def list_providers() -> dict[str, str]:
-        return container().providers.manifest
+        return container().provider_manifest
 
     @application.get("/metrics", response_class=PlainTextResponse)
     def metrics() -> str:

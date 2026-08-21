@@ -82,7 +82,12 @@ def test_openai_provider_uses_structured_evidence_bounded_workflow() -> None:
 
     provider = OpenAIResearchProvider("test-key", model="gpt-5.4-mini", transport=transport)
     baseline = ResearchPlanner().create_plan("Does agentic retrieval improve multi-hop retrieval?", "quick")
-    plan = provider.plan(baseline.main_question, "quick", baseline)
+    plan = provider.plan(
+        baseline.main_question,
+        "quick",
+        baseline,
+        ["The researcher prioritizes enterprise benchmarks."],
+    )
     evidence = _evidence()
     claims = provider.synthesize_claims(baseline.main_question, [evidence])
     decisions = provider.verify_claims(
@@ -127,6 +132,8 @@ def test_openai_provider_uses_structured_evidence_bounded_workflow() -> None:
         "research_plan", "evidence_claims", "claim_verification", "research_report",
     }
     assert all(item["store"] is False and item["text"]["format"]["strict"] is True for item in captured)
+    plan_input = json.loads(next(item for item in captured if item["text"]["format"]["name"] == "research_plan")["input"])
+    assert plan_input["prior_memory_context"] == ["The researcher prioritizes enterprise benchmarks."]
 
 
 def test_reasoning_failures_use_deterministic_fallbacks() -> None:

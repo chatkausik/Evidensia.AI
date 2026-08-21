@@ -14,3 +14,6 @@ artifacts/build_doc/
 artifacts/build_ppt/
 artifacts/Evidensia_AI_Project_Presentation/
 artifacts/*.inspect.ndjson
+
+# Microsoft Office lock files
+~$*.docx

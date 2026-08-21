@@ -8,6 +8,7 @@ from evidensia.graph import ResearchOrchestrator
 from evidensia.models import AgentEvent, ResearchRequest, ResearchState
 from evidensia.persistence import LocalStateStore
 from evidensia.retrieval import HybridSearcher, LocalKnowledgeIndex
+from evidensia.services.memory import DisabledLongTermMemory, LongTermMemory
 
 
 class ResearchRunService:
@@ -20,8 +21,10 @@ class ResearchRunService:
         synthesis: SynthesisEngine | None = None,
         store: LocalStateStore | None = None,
         provider_manifest: dict[str, str] | None = None,
+        memory: LongTermMemory | None = None,
     ) -> None:
         self.store = store or LocalStateStore()
+        self.memory = memory or DisabledLongTermMemory()
         self.orchestrator = ResearchOrchestrator(
             index,
             searcher=searcher,
@@ -52,12 +55,16 @@ class ResearchRunService:
             collection = self.store.get_named("collections", "collection_id", request.namespace)
             if collection:
                 filters["document_ids"] = collection.get("document_ids", [])
+        memory_user_id = request.user_id if request.use_memory and self.memory.enabled else None
+        recalled_memories = self.memory.recall(request.question, memory_user_id) if memory_user_id else []
         state = self.orchestrator.initial_state(
             run_id,
             request.question,
             request.depth,
             namespace=request.namespace,
             metadata_filters=filters,
+            memory_user_id=memory_user_id,
+            recalled_memories=recalled_memories,
         )
         with self._lock:
             self.runs[run_id] = state
@@ -77,6 +84,18 @@ class ResearchRunService:
                 self.store.save_run(run_id, snapshot)
 
         final = self.orchestrator.run(state, capture)
+        if final.memory_user_id and self.memory.remember_research(final, final.memory_user_id):
+            final = final.model_copy(update={"memory_write_accepted": True})
+            capture(
+                AgentEvent(
+                    event_id=f"evt_{uuid.uuid4().hex[:16]}",
+                    run_id=run_id,
+                    type="memory.stored",
+                    message="Queued verified research context for long-term memory",
+                    data={"provider": self.memory.name},
+                ),
+                final,
+            )
         with self._lock:
             self.runs[run_id] = final
             self.store.save_run(run_id, final)

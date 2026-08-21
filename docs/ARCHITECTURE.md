@@ -9,10 +9,10 @@ Evidensia turns an open-ended research question into a traceable report whose cl
 1. **Ask and scope.** A researcher supplies a question, research depth, date range, and optional collection. The same workspace can accept local PDF, Markdown, HTML, and text files.
 2. **Discover sources.** Evidensia searches arXiv, OpenAlex, Semantic Scholar, and Crossref. It normalizes provider records, deduplicates by DOI and paper identity, and uses Unpaywall when a DOI can be resolved to a lawful open-access copy.
 3. **Build the corpus.** Documents are parsed, enriched with deterministic metadata, divided into section-aware parent and retrieval chunks, and added to the local dense and BM25 indexes. Every chunk retains its document and source-span provenance.
-4. **Plan and retrieve.** The LangGraph workflow decomposes the question into sub-questions and counter-evidence targets. Each query uses dense retrieval and BM25, reciprocal-rank fusion, and transparent reranking.
+4. **Recall, plan, and retrieve.** When Mem0 and a user ID are configured, Evidensia recalls relevant prior context before the LangGraph workflow decomposes the question into sub-questions and counter-evidence targets. Each query uses dense retrieval and BM25, reciprocal-rank fusion, and transparent reranking. Recalled memory can guide scope and query expansion but never enters the evidence set.
 5. **Correct weak retrieval.** A sufficiency gate evaluates coverage, source diversity, contradiction coverage, and the selected depth budget. If the evidence is incomplete, the agent rewrites the uncovered queries and retrieves again until evidence is sufficient or the correction budget is exhausted.
 6. **Synthesize and verify.** Supporting and contradicting passages become bounded evidence packets. When configured, the OpenAI research provider plans, synthesizes, verifies, and composes through strict JSON schemas; any refusal, timeout, invalid response, or provider error falls back to deterministic reasoning. Citation resolution and entailment checks gate every proposed claim.
-7. **Deliver and improve.** The Research Studio streams the run timeline, exposes source passages, and exports Markdown, JSON, BibTeX, or RIS. Saved searches, collections, feedback, retrieval debugging, citation graphs, experiments, and ablations support repeatable improvement.
+7. **Deliver, remember, and improve.** The Research Studio streams the run timeline, exposes source passages, and exports Markdown, JSON, BibTeX, or RIS. Successful citation-verified summaries can be written to user-scoped Mem0 memory for future runs. Saved searches, collections, feedback, retrieval debugging, citation graphs, experiments, and ablations support repeatable improvement.
 
 ## Runtime architecture
 
@@ -25,7 +25,7 @@ Evidensia turns an open-ended research question into a traceable report whose cl
 | Retrieval pipeline | Query analysis, dense and BM25 retrieval, reciprocal-rank fusion, and reranking | `src/evidensia/retrieval/` |
 | Research graph | Plan → retrieve → assess → rewrite loop → synthesize → verify | `src/evidensia/graph/research.py` |
 | Reasoning providers | OpenAI structured reasoning with deterministic fallbacks | `src/evidensia/agents/` |
-| Persistence and exports | Documents, runs, events, searches, collections, feedback, experiments, and report formats | `src/evidensia/persistence.py`, `src/evidensia/services/exports.py` |
+| Persistence, memory, and exports | Documents, runs, events, searches, collections, feedback, experiments, optional Mem0 long-term memory, and report formats | `src/evidensia/persistence.py`, `src/evidensia/services/memory.py`, `src/evidensia/services/exports.py` |
 
 ## Corrective research state machine
 
@@ -43,6 +43,7 @@ The correction loop is deliberately bounded. A run may stop rewriting when it re
 - Scholarly providers receive the discovery query and date/provider filters required for search.
 - Imported content and research state remain in the configured local `EVIDENSIA_DATA_DIR`.
 - When `OPENAI_API_KEY` is configured, only the bounded evidence context needed for planning, synthesis, verification, or report composition is sent to the selected research model.
+- When `MEM0_API_KEY` and a research `user_id` are configured, relevant user-scoped memories are retrieved for planning and verified result summaries are queued for write-back. They are never accepted as evidence or citations.
 - Without an OpenAI key—or after any model failure—the research graph stays operational through deterministic planning, lexical reranking, lexical entailment, and report generation.
 - Embedding, reranking, and entailment providers are independently configurable and reported by `GET /v1/providers`.
 
@@ -61,7 +62,8 @@ FastAPI on 127.0.0.1:8002
    ├── local corpus and SQLite state
    ├── scholarly discovery APIs
    ├── optional Unpaywall PDF resolution
-   └── optional OpenAI Responses API
+   ├── optional OpenAI Responses API
+   └── optional Mem0 Platform memory API
 ```
 
 The web app reads `NEXT_PUBLIC_API_URL`, defaulting to `http://127.0.0.1:8002`. CORS includes the normal local development origins and the private Evidensia Sites origin; additional origins can be supplied through `EVIDENSIA_CORS_ORIGINS`.

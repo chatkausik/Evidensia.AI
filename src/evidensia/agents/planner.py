@@ -15,11 +15,16 @@ class ResearchPlanner:
     def __init__(self, reasoning: ResearchReasoningProvider | None = None) -> None:
         self.reasoning = reasoning
 
-    def create_plan(self, question: str, depth: str = "standard") -> ResearchPlan:
+    def create_plan(
+        self,
+        question: str,
+        depth: str = "standard",
+        memory_context: list[str] | None = None,
+    ) -> ResearchPlan:
         fallback = self._deterministic_plan(question, depth)
         if self.reasoning:
             try:
-                return self.reasoning.plan(question, depth, fallback)
+                return self.reasoning.plan(question, depth, fallback, memory_context)
             except Exception as exc:
                 logger.warning("Research model planning failed; using deterministic fallback: %s", type(exc).__name__)
         return fallback

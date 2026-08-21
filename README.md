@@ -28,6 +28,17 @@ Open `http://localhost:3000` (or the next port reported by the development serve
 
 The local API stores documents, research runs and event timelines, evaluation experiments, feedback, saved searches, and collections under `.evidensia_data` by default, so work survives API restarts. Set `EVIDENSIA_DATA_DIR` before starting the API to use a different location.
 
+## Long-term memory with Mem0
+
+Set a Mem0 Platform API key to recall relevant context before each research plan and save citation-verified research summaries after successful runs:
+
+```bash
+export MEM0_API_KEY=your_mem0_key
+uvicorn evidensia.api:app --host 127.0.0.1 --port 8002 --reload --env-file .env
+```
+
+The Research Studio creates a stable browser-local researcher ID and sends it as `user_id`; API callers can provide their own safe, authenticated user identifier. Set `use_memory: false` on `POST /v1/research` to opt out for a run. Recalled memories guide planning and query expansion only—they are not included in evidence, claims, or citation verification. Mem0 is fail-open and optional: missing credentials, timeouts, or provider errors leave the normal research workflow operational.
+
 ## Research-paper discovery
 
 The **Discover papers** workspace searches arXiv, OpenAlex, Semantic Scholar, and Crossref over a bounded date range. These sources support basic discovery without credentials. OpenAlex and Semantic Scholar keys increase API capacity, while a contact email identifies Evidensia politely to scholarly APIs and enables Unpaywall open-access resolution:
@@ -77,6 +88,7 @@ uvicorn evidensia.api:app --host 127.0.0.1 --port 8002 --reload --env-file .env
 - citation validity and lexical entailment checks
 - Recall@K, document recall, Precision@K, MRR, NDCG, hit rate, answer/claim coverage, and ablation APIs
 - durable research runs, event streams, experiments, feedback, saved searches, and collections
+- optional user-scoped Mem0 recall and verified research memory write-back
 - live Research Studio SSE, evidence explorer, source comparison, citation graph, retrieval debugger, and evaluation dashboard
 - Markdown, JSON, BibTeX, and RIS report exports
 

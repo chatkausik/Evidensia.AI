@@ -7,7 +7,7 @@ from typing import Any, Literal, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from evidensia.agents import EvidenceExtractor, ResearchPlanner, SufficiencyEvaluator, SynthesisEngine
-from evidensia.models import AgentEvent, ResearchState, SubQuestion
+from evidensia.models import AgentEvent, MemorySnippet, ResearchState, SubQuestion
 from evidensia.retrieval import HybridSearcher, LocalKnowledgeIndex
 
 
@@ -18,6 +18,9 @@ class GraphState(TypedDict, total=False):
     namespace: str
     metadata_filters: dict[str, str | int | list[str]]
     provider_manifest: dict[str, str]
+    memory_user_id: str | None
+    recalled_memories: list[dict[str, Any]]
+    memory_write_accepted: bool
     research_plan: dict[str, Any] | None
     sub_questions: list[dict[str, Any]]
     search_queries: list[str]
@@ -62,6 +65,8 @@ class ResearchOrchestrator:
         *,
         namespace: str = "open-research",
         metadata_filters: dict[str, str | int | list[str]] | None = None,
+        memory_user_id: str | None = None,
+        recalled_memories: list[MemorySnippet] | None = None,
     ) -> ResearchState:
         max_iterations = {"quick": 1, "standard": 3, "deep": 4}[depth]
         return ResearchState(
@@ -71,6 +76,8 @@ class ResearchOrchestrator:
             namespace=namespace,
             metadata_filters=metadata_filters or {},
             provider_manifest=self.provider_manifest,
+            memory_user_id=memory_user_id,
+            recalled_memories=recalled_memories or [],
             max_iterations=max_iterations,
         )
 
@@ -81,6 +88,15 @@ class ResearchOrchestrator:
     ) -> ResearchState:
         current = initial.model_dump(mode="python")
         self._emit(initial.run_id, "research.started", "Research run started", {}, initial, on_event)
+        if initial.recalled_memories:
+            self._emit(
+                initial.run_id,
+                "memory.recalled",
+                f"Recalled {len(initial.recalled_memories)} relevant long-term memories",
+                {"memory_count": len(initial.recalled_memories)},
+                initial,
+                on_event,
+            )
         try:
             for update_batch in self.graph.stream(current, stream_mode="updates"):
                 for node, update in update_batch.items():
@@ -114,11 +130,13 @@ class ResearchOrchestrator:
 
     def _plan(self, state: GraphState) -> dict[str, Any]:
         validated = ResearchState.model_validate(state)
-        plan = self.planner.create_plan(validated.question, validated.depth)
+        memory_context = [item.text for item in validated.recalled_memories]
+        plan = self.planner.create_plan(validated.question, validated.depth, memory_context)
+        memory_queries = [f"{validated.question} {item[:500]}" for item in memory_context[:2]]
         return {
             "research_plan": plan.model_dump(mode="python"),
             "sub_questions": [item.model_dump(mode="python") for item in plan.sub_questions],
-            "search_queries": [item.question for item in plan.sub_questions],
+            "search_queries": [item.question for item in plan.sub_questions] + memory_queries,
             "status": "retrieving",
         }
 

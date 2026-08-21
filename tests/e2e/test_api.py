@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from evidensia.api import create_app
 from evidensia.connectors.arxiv import ArxivConnector
+from evidensia.models import MemorySnippet
 
 
 ARXIV_FEED = b"""<feed xmlns="http://www.w3.org/2005/Atom">
@@ -140,3 +141,76 @@ def test_persistent_workflows_scoped_research_and_exports(tmp_path) -> None:
     assert restarted.get("/v1/saved-searches").json()[0]["search_id"] == saved.json()["search_id"]
     assert restarted.get(f"/v1/research/{payload['run_id']}").status_code == 200
     assert len(restarted.get("/v1/evals/experiments").json()) == 4
+
+
+def test_mem0_context_is_scoped_to_user_and_written_after_research() -> None:
+    class RecordingMemory:
+        name = "mem0:platform"
+        enabled = True
+
+        def __init__(self) -> None:
+            self.recall_calls: list[tuple[str, str]] = []
+            self.write_calls: list[tuple[str, str]] = []
+
+        def recall(self, query: str, user_id: str) -> list[MemorySnippet]:
+            self.recall_calls.append((query, user_id))
+            return [
+                MemorySnippet(
+                    memory_id="mem_1",
+                    text="The researcher prioritizes enterprise benchmarks.",
+                    score=0.91,
+                )
+            ]
+
+        def remember_research(self, state, user_id: str) -> bool:
+            self.write_calls.append((state.run_id, user_id))
+            return True
+
+    application = create_app(seed_demo=True)
+    memory = RecordingMemory()
+    application.state.container.research.memory = memory
+    application.state.container.research.orchestrator.provider_manifest["memory"] = memory.name
+    client = TestClient(application)
+
+    response = client.post("/v1/research", json={
+        "question": "What benefits and costs were measured for agentic retrieval?",
+        "depth": "quick",
+        "user_id": "researcher-123",
+        "run_synchronously": True,
+    })
+
+    assert response.status_code == 202, response.text
+    result = response.json()
+    assert result["status"] == "completed"
+    assert result["recalled_memories"][0]["memory_id"] == "mem_1"
+    assert any("enterprise benchmarks" in query for query in result["search_queries"])
+    assert result["memory_write_accepted"] is True
+    assert memory.recall_calls == [("What benefits and costs were measured for agentic retrieval?", "researcher-123")]
+    assert memory.write_calls == [(result["run_id"], "researcher-123")]
+
+
+def test_research_memory_can_be_disabled_per_run() -> None:
+    class UnexpectedMemory:
+        name = "mem0:platform"
+        enabled = True
+
+        def recall(self, query: str, user_id: str) -> list[MemorySnippet]:
+            raise AssertionError("memory recall should be disabled")
+
+        def remember_research(self, state, user_id: str) -> bool:
+            raise AssertionError("memory write should be disabled")
+
+    application = create_app(seed_demo=True)
+    application.state.container.research.memory = UnexpectedMemory()
+    client = TestClient(application)
+    response = client.post("/v1/research", json={
+        "question": "What benefits and costs were measured for agentic retrieval?",
+        "depth": "quick",
+        "user_id": "researcher-123",
+        "use_memory": False,
+        "run_synchronously": True,
+    })
+
+    assert response.status_code == 202, response.text
+    assert response.json()["recalled_memories"] == []
+    assert response.json()["memory_write_accepted"] is False
