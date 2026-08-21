@@ -22,12 +22,20 @@ class SynthesisEngine:
         self.entailment = entailment or LexicalEntailmentProvider()
         self.reasoning = reasoning
 
-    def build_claims(self, evidence: list[Evidence], question: str = "") -> list[ResearchClaim]:
+    def build_claims(
+        self,
+        evidence: list[Evidence],
+        question: str = "",
+        diagnostics: list[str] | None = None,
+    ) -> list[ResearchClaim]:
         if self.reasoning and evidence:
             try:
                 return self.reasoning.synthesize_claims(question, evidence)
             except Exception as exc:
-                logger.warning("Research model synthesis failed; using deterministic fallback: %s", type(exc).__name__)
+                self._record(diagnostics, "synthesis", exc)
+                logger.warning(
+                    "Research model synthesis failed; using deterministic fallback: %s", exc, exc_info=True
+                )
         return self._deterministic_claims(evidence)
 
     def _deterministic_claims(self, evidence: list[Evidence]) -> list[ResearchClaim]:
@@ -77,6 +85,7 @@ class SynthesisEngine:
         claims: list[ResearchClaim],
         evidence: list[Evidence],
         index: LocalKnowledgeIndex,
+        diagnostics: list[str] | None = None,
     ) -> list[CitationVerification]:
         evidence_by_id = {item.evidence_id: item for item in evidence}
         passages: dict[tuple[str, str], str] = {}
@@ -91,7 +100,10 @@ class SynthesisEngine:
             try:
                 model_checks = self.reasoning.verify_claims(claims, evidence, passages)
             except Exception as exc:
-                logger.warning("Research model verification failed; using lexical fallback: %s", type(exc).__name__)
+                self._record(diagnostics, "verification", exc)
+                logger.warning(
+                    "Research model verification failed; using lexical fallback: %s", exc, exc_info=True
+                )
                 model_checks = {}
         checks: list[CitationVerification] = []
         for claim in claims:
@@ -128,6 +140,7 @@ class SynthesisEngine:
         evidence: list[Evidence],
         verifications: list[CitationVerification],
         unresolved: list[str],
+        diagnostics: list[str] | None = None,
     ) -> ResearchReport:
         valid_citations = {check.citation_id for check in verifications if check.valid_source and check.entails_claim}
         evidence_by_id = {item.evidence_id: item for item in evidence}
@@ -179,8 +192,23 @@ class SynthesisEngine:
                     fallback,
                 )
             except Exception as exc:
-                logger.warning("Research model report composition failed; using deterministic fallback: %s", type(exc).__name__)
+                self._record(diagnostics, "report", exc)
+                logger.warning(
+                    "Research model report composition failed; using deterministic fallback: %s", exc, exc_info=True
+                )
         return fallback
+
+    @staticmethod
+    def _record(diagnostics: list[str] | None, stage: str, exc: Exception) -> None:
+        """Note that a stage fell back, so the run can report it.
+
+        `provider_manifest` records which providers are *configured*; a run whose
+        every model call failed carries an identical manifest to one that
+        succeeded. Without this the deterministic fallback is indistinguishable
+        from working AI.
+        """
+        if diagnostics is not None:
+            diagnostics.append(f"{stage}: {type(exc).__name__}: {exc}")
 
     @staticmethod
     def _overlap(left: str, right: str) -> float:

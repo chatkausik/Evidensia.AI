@@ -181,6 +181,40 @@ def create_app(*, seed_demo: bool = True, data_dir: str | None = None) -> FastAP
     def list_providers() -> dict[str, str]:
         return container().provider_manifest
 
+    @application.get("/v1/research/{run_id}/diagnostics")
+    def research_diagnostics(run_id: str) -> dict[str, object]:
+        """Report whether this run's model-backed stages actually ran.
+
+        `provider_manifest` says what was configured; it looks identical whether
+        the reasoning provider served the run or every call failed and the
+        deterministic fallback produced the answer. This endpoint distinguishes
+        them.
+        """
+        state = container().research.get(run_id)
+        if not state:
+            raise HTTPException(404, "Research run not found")
+        stages = {entry.split(":", 1)[0] for entry in state.reasoning_fallbacks}
+        configured = state.provider_manifest.get("research", "deterministic-fallback")
+        # Three distinct situations that all previously looked like a healthy run:
+        #   none      - no reasoning provider configured; deterministic by design
+        #   degraded  - one is configured but its calls failed
+        #   model     - configured and it actually served every stage
+        if configured == "deterministic-fallback":
+            served_by = "none"
+        elif stages:
+            served_by = "degraded"
+        else:
+            served_by = "model"
+        return {
+            "run_id": run_id,
+            "provider_manifest": state.provider_manifest,
+            "reasoning_fallbacks": state.reasoning_fallbacks,
+            "degraded_stages": sorted(stages),
+            "reasoning_configured": configured,
+            "served_by": served_by,
+            "model_backed": served_by == "model",
+        }
+
     @application.get("/metrics", response_class=PlainTextResponse)
     def metrics() -> str:
         current = container()

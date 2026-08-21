@@ -17,3 +17,6 @@ artifacts/*.inspect.ndjson
 
 # Microsoft Office lock files
 ~$*.docx
+
+# Build artifacts
+apps/web/tsconfig.tsbuildinfo

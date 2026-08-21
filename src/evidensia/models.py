@@ -329,6 +329,11 @@ class ResearchState(StrictModel):
     namespace: str = "open-research"
     metadata_filters: dict[str, str | int | list[str]] = Field(default_factory=dict)
     provider_manifest: dict[str, str] = Field(default_factory=dict)
+    # Which model-backed stages fell back to the deterministic path, and why.
+    # provider_manifest records what is *configured*; a run whose every model
+    # call failed carries an identical manifest to one that fully succeeded, so
+    # the manifest alone cannot tell you whether the AI actually ran.
+    reasoning_fallbacks: list[str] = Field(default_factory=list)
     memory_user_id: str | None = None
     recalled_memories: list[MemorySnippet] = Field(default_factory=list)
     memory_write_accepted: bool = False
