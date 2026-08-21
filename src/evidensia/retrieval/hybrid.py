@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 from time import perf_counter
+from typing import TYPE_CHECKING
 
 from evidensia.models import RankedEvidence, SearchDebug
-from evidensia.providers import RerankerProvider
 from evidensia.retrieval.fusion import reciprocal_rank_fusion
 from evidensia.retrieval.index import LocalKnowledgeIndex
 from evidensia.retrieval.query import classify_query
 from evidensia.retrieval.reranker import LocalReranker
+
+if TYPE_CHECKING:
+    # Type-only import. `providers` reads `retrieval.text`, which executes the
+    # retrieval package __init__, which imports this module — so importing
+    # providers at runtime here closes a cycle and makes
+    # `import evidensia.providers` fail unless something imported
+    # `evidensia.retrieval` first. The annotation is all we need.
+    from evidensia.providers import RerankerProvider
 
 
 class HybridSearcher:

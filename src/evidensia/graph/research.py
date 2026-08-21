@@ -18,6 +18,7 @@ class GraphState(TypedDict, total=False):
     namespace: str
     metadata_filters: dict[str, str | int | list[str]]
     provider_manifest: dict[str, str]
+    reasoning_fallbacks: list[str]
     memory_user_id: str | None
     recalled_memories: list[dict[str, Any]]
     memory_write_accepted: bool
@@ -193,23 +194,35 @@ class ResearchOrchestrator:
 
     def _synthesize(self, state: GraphState) -> dict[str, Any]:
         validated = ResearchState.model_validate(state)
-        claims = self.synthesis.build_claims(validated.retrieved_evidence, validated.question)
-        return {"claims": [item.model_dump(mode="python") for item in claims], "status": "verifying"}
+        # A fresh list per node call: SynthesisEngine is shared across concurrent
+        # runs, so this must never be instance state.
+        diagnostics: list[str] = list(validated.reasoning_fallbacks)
+        claims = self.synthesis.build_claims(validated.retrieved_evidence, validated.question, diagnostics)
+        return {
+            "claims": [item.model_dump(mode="python") for item in claims],
+            "reasoning_fallbacks": diagnostics,
+            "status": "verifying",
+        }
 
     def _verify(self, state: GraphState) -> dict[str, Any]:
         validated = ResearchState.model_validate(state)
-        verifications = self.synthesis.verify(validated.claims, validated.retrieved_evidence, self.index)
+        diagnostics: list[str] = list(validated.reasoning_fallbacks)
+        verifications = self.synthesis.verify(
+            validated.claims, validated.retrieved_evidence, self.index, diagnostics
+        )
         report = self.synthesis.report(
             validated.question,
             validated.claims,
             validated.retrieved_evidence,
             verifications,
             validated.missing_evidence,
+            diagnostics,
         )
         return {
             "citation_verifications": [item.model_dump(mode="python") for item in verifications],
             "final_report": report.model_dump(mode="python"),
             "confidence": report.confidence_score,
+            "reasoning_fallbacks": diagnostics,
             "status": "completed",
         }
 
