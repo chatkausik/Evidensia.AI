@@ -6,15 +6,29 @@ Phases 5 (production infrastructure) and 7 (large-scale deployment) from the sou
 
 ![Evidensia end-to-end research flow](docs/assets/evidensia-end-to-end-flow.svg)
 
-See [Architecture and research flow](docs/ARCHITECTURE.md) for the complete execution model, runtime boundaries, corrective-retrieval loop, and component map.
+## Documentation
+
+| Guide | Covers |
+|---|---|
+| [Architecture](docs/ARCHITECTURE.md) | Execution model, runtime boundaries, corrective-retrieval loop, component map |
+| [API reference](docs/API.md) | All 33 endpoints, SSE event types, run diagnostics |
+| [Configuration](docs/CONFIGURATION.md) | Every environment variable, provider selection, secrets handling |
+| [Evaluation](docs/EVALUATION.md) | Metric definitions, ablation pipelines, designing a gold set that discriminates |
+| [Development](docs/DEVELOPMENT.md) | Repository layout, test strategy, import hygiene, adding a provider |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | Failures that actually occur, and the diagnostic for each |
 
 ## Quick start
 
 ```bash
 python3 -m pip install -e '.[dev]'
 cp .env.example .env
-uvicorn evidensia.api:app --host 127.0.0.1 --port 8002 --reload --env-file .env
+uvicorn evidensia.api:app --host 127.0.0.1 --port 8002 --reload --reload-dir src --env-file .env
 ```
+
+`--env-file .env` is required: nothing loads `.env` implicitly, and without it
+every optional provider silently resolves to its local deterministic
+implementation. `--reload-dir src` keeps the watcher off `.venv`, which
+otherwise restarts the API on any dependency change.
 
 In a second terminal:
 
@@ -25,6 +39,11 @@ npm run dev
 ```
 
 Open `http://localhost:3000` (or the next port reported by the development server). The API runs at `http://127.0.0.1:8002`, with interactive documentation at `http://127.0.0.1:8002/docs`.
+
+The Studio hardcodes `http://127.0.0.1:8002` as its default. Running the API on
+a different port without also setting `NEXT_PUBLIC_API_URL` produces "The paper
+discovery API is unavailable" in the browser while `curl` against the API
+succeeds.
 
 The local API stores documents, research runs and event timelines, evaluation experiments, feedback, saved searches, and collections under `.evidensia_data` by default, so work survives API restarts. Set `EVIDENSIA_DATA_DIR` before starting the API to use a different location.
 
@@ -60,6 +79,7 @@ API endpoints:
 - `GET|POST /v1/saved-searches` — persist and rerun discovery queries
 - `GET|POST /v1/collections` — scope research to curated document groups
 - `GET /v1/research/{run_id}/export` — export Markdown, JSON, BibTeX, or RIS reports
+- `GET /v1/research/{run_id}/diagnostics` — whether the reasoning model served the run or it fell back
 
 ## Configurable model providers
 

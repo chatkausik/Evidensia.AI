@@ -49,6 +49,25 @@ The correction loop is deliberately bounded. A run may stop rewriting when it re
 
 ## Persistence and observability
 
+### Distinguishing a model-backed run from a degraded one
+
+Every model-backed stage degrades to a deterministic implementation when the
+provider fails, which keeps a run alive during an outage. The cost is that the
+two outcomes are otherwise identical from the outside: the run completes, the
+report renders, and `provider_manifest` still names the configured model —
+because it records what is *configured*, not what *ran*.
+
+`GET /v1/research/{run_id}/diagnostics` resolves the ambiguity, reporting
+`served_by` as `none` (nothing configured), `degraded` (configured but failing,
+with causes), or `model` (served every stage). Each fallback is also recorded on
+`ResearchState.reasoning_fallbacks` and logged with its underlying exception.
+
+This matters for any claim made about output quality: a report produced while
+`served_by` is `degraded` was written by lexical heuristics, whatever the
+manifest says.
+
+### Durable state
+
 The default development store lives under `.evidensia_data` and survives API restarts. It contains document manifests and content plus SQLite-backed research runs, event timelines, saved searches, collections, feedback, and experiment results. The Research Studio consumes server-sent events while a run is active, and every completed run can be inspected or exported later.
 
 ## Local process topology
