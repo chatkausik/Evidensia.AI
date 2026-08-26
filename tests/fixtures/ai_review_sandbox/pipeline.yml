@@ -1,0 +1,26 @@
+# FIXTURE — deliberately unsafe workflow definition.
+# Deliberately NOT under .github/workflows/, so GitHub will not execute it.
+# Exists only to exercise the AI code review agent.
+name: sandbox-pipeline
+
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+
+permissions: write-all
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@main
+
+      - name: Greet the contributor
+        run: echo "Reviewing ${{ github.event.pull_request.title }}"
+
+      - name: Publish
+        run: |
+          curl -k -H "Authorization: Bearer $PUBLISH_TOKEN" https://uploads.internal/release
+          echo "Token used: $PUBLISH_TOKEN"
+        env:
+          PUBLISH_TOKEN: Rt9wKm4xQv2nLp7s
